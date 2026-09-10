@@ -40,7 +40,7 @@ SERVER_STATUS_FOOTER_PREFIX = "머장봇 · 서버 상태"
 
 # =========================================================
 # 화면 표시 문구 정리
-# - 기존 기능들에 남아 있는 '모비라이프 기준' 문구를 전부 숨김
+# - 출처/보관소 관련 표시 문구는 사용자 화면에서 숨김
 # =========================================================
 
 def _clean_display_text(value):
@@ -48,10 +48,25 @@ def _clean_display_text(value):
         return value
 
     text = value
+
+    # 기존 '모비라이프 기준' 표시 제거
     text = text.replace(" · 모비라이프 기준", "")
     text = text.replace("모비라이프 기준 ", "")
     text = text.replace("모비라이프 기준", "")
+
+    # /시세의 '모비라이프 거래소' 표시 제거
+    text = text.replace("모비라이프 거래소에서 ", "")
+    text = text.replace("모비라이프 거래소", "")
+
+    # /악보의 '악보 보관소' 표시 제거
+    text = text.replace("모비라이프 악보 보관소에서 ", "")
+    text = text.replace("모비라이프 악보 보관소", "")
+    text = text.replace("악보 보관소 검색", "")
+    text = text.replace("악보 보관소", "")
+
+    # 문구 제거 뒤 남는 구분자/공백 정리
     text = re.sub(r"\s+·\s+·\s+", " · ", text)
+    text = re.sub(r"\s*·\s*$", "", text)
     text = re.sub(r" {2,}", " ", text)
     return text.strip()
 
@@ -59,6 +74,7 @@ def _clean_display_text(value):
 _original_embed_init = discord.Embed.__init__
 _original_embed_set_footer = discord.Embed.set_footer
 _original_embed_add_field = discord.Embed.add_field
+_original_tree_command = discord.app_commands.CommandTree.command
 
 
 def _embed_init_cleaned(self, *args, **kwargs):
@@ -86,9 +102,16 @@ def _embed_add_field_cleaned(self, *, name, value, inline=True):
     )
 
 
+def _tree_command_cleaned(self, *args, **kwargs):
+    if "description" in kwargs:
+        kwargs["description"] = _clean_display_text(kwargs["description"])
+    return _original_tree_command(self, *args, **kwargs)
+
+
 discord.Embed.__init__ = _embed_init_cleaned
 discord.Embed.set_footer = _embed_set_footer_cleaned
 discord.Embed.add_field = _embed_add_field_cleaned
+discord.app_commands.CommandTree.command = _tree_command_cleaned
 
 
 # =========================================================
