@@ -34,8 +34,6 @@ else:
     MOBLIFE_REFERER = "https://mabimobi.life/"
 
 KST = timezone(timedelta(hours=9))
-SERVER_STATUS_NORMAL_NAME = "🟢│서버-정상"
-SERVER_STATUS_MAINTENANCE_NAME = "🔴│서버-점검중"
 SERVER_STATUS_FOOTER_PREFIX = "머장봇 · 서버 상태"
 
 
@@ -76,6 +74,22 @@ def format_datetime(value):
         return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M:%S KST")
     except Exception:
         return str(value)
+
+
+def strip_status_dot(channel_name):
+    """채널명 맨 앞의 기존 상태 동그라미만 제거한다."""
+    name = (channel_name or "").strip()
+    while name.startswith("🟢") or name.startswith("🔴"):
+        name = name[1:].lstrip()
+    return name
+
+
+def build_status_channel_name(base_name, is_maintenance):
+    dot = "🔴" if is_maintenance else "🟢"
+    clean_name = strip_status_dot(base_name)
+    if not clean_name:
+        clean_name = "🖥️모비노기-서버상태"
+    return f"{dot}{clean_name}"
 
 
 async def fetch_maintenance_status():
@@ -179,6 +193,7 @@ def install_server_status(client):
     state = {
         "message": None,
         "last_state": None,
+        "base_channel_name": None,
     }
 
     async def find_existing_message(channel):
@@ -212,6 +227,13 @@ def install_server_status(client):
             )
             return
 
+        # 최초 1회 현재 채널명을 기억한다.
+        # 재시작 당시 이미 🟢/🔴가 붙어 있어도 동그라미만 제거해서 원래 이름을 보존한다.
+        if state["base_channel_name"] is None:
+            state["base_channel_name"] = strip_status_dot(
+                getattr(channel, "name", "")
+            )
+
         # API 오류를 실제 점검으로 오인하지 않는다.
         # 실패하면 기존 채널명/메시지를 그대로 두고 다음 분에 다시 확인한다.
         try:
@@ -225,13 +247,12 @@ def install_server_status(client):
 
         now_utc = datetime.now(timezone.utc)
         is_maintenance = bool(data.get("is_maintenance"))
-        desired_name = (
-            SERVER_STATUS_MAINTENANCE_NAME
-            if is_maintenance
-            else SERVER_STATUS_NORMAL_NAME
+        desired_name = build_status_channel_name(
+            state["base_channel_name"],
+            is_maintenance,
         )
 
-        # 채널명은 매분 바꾸지 않고 실제 이름이 달라질 때만 수정한다.
+        # 채널명 본문은 유지하고 앞의 상태 동그라미만 바꾼다.
         if getattr(channel, "name", None) != desired_name:
             try:
                 await channel.edit(
