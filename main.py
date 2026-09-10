@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from datetime import datetime, timezone, timedelta
 
@@ -36,6 +37,63 @@ else:
 KST = timezone(timedelta(hours=9))
 SERVER_STATUS_FOOTER_PREFIX = "머장봇 · 서버 상태"
 
+
+# =========================================================
+# 화면 표시 문구 정리
+# - 기존 기능들에 남아 있는 '모비라이프 기준' 문구를 전부 숨김
+# =========================================================
+
+def _clean_display_text(value):
+    if not isinstance(value, str):
+        return value
+
+    text = value
+    text = text.replace(" · 모비라이프 기준", "")
+    text = text.replace("모비라이프 기준 ", "")
+    text = text.replace("모비라이프 기준", "")
+    text = re.sub(r"\s+·\s+·\s+", " · ", text)
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
+
+
+_original_embed_init = discord.Embed.__init__
+_original_embed_set_footer = discord.Embed.set_footer
+_original_embed_add_field = discord.Embed.add_field
+
+
+def _embed_init_cleaned(self, *args, **kwargs):
+    if "title" in kwargs:
+        kwargs["title"] = _clean_display_text(kwargs["title"])
+    if "description" in kwargs:
+        kwargs["description"] = _clean_display_text(kwargs["description"])
+    return _original_embed_init(self, *args, **kwargs)
+
+
+def _embed_set_footer_cleaned(self, *, text=None, icon_url=None):
+    return _original_embed_set_footer(
+        self,
+        text=_clean_display_text(text),
+        icon_url=icon_url,
+    )
+
+
+def _embed_add_field_cleaned(self, *, name, value, inline=True):
+    return _original_embed_add_field(
+        self,
+        name=_clean_display_text(name),
+        value=_clean_display_text(value),
+        inline=inline,
+    )
+
+
+discord.Embed.__init__ = _embed_init_cleaned
+discord.Embed.set_footer = _embed_set_footer_cleaned
+discord.Embed.add_field = _embed_add_field_cleaned
+
+
+# =========================================================
+# 서버 상태 유틸
+# =========================================================
 
 def parse_iso_datetime(value):
     if not value:
@@ -184,7 +242,7 @@ def build_status_embed(data, now_utc):
         inline=False,
     )
     embed.set_footer(
-        text=f"{SERVER_STATUS_FOOTER_PREFIX} · 모비라이프 기준 · 1분마다 갱신"
+        text=f"{SERVER_STATUS_FOOTER_PREFIX} · 1분마다 갱신"
     )
     return embed
 
@@ -227,15 +285,12 @@ def install_server_status(client):
             )
             return
 
-        # 최초 1회 현재 채널명을 기억한다.
-        # 재시작 당시 이미 🟢/🔴가 붙어 있어도 동그라미만 제거해서 원래 이름을 보존한다.
         if state["base_channel_name"] is None:
             state["base_channel_name"] = strip_status_dot(
                 getattr(channel, "name", "")
             )
 
-        # API 오류를 실제 점검으로 오인하지 않는다.
-        # 실패하면 기존 채널명/메시지를 그대로 두고 다음 분에 다시 확인한다.
+        # API 오류는 점검으로 오인하지 않고 기존 상태를 유지한다.
         try:
             data = await fetch_maintenance_status()
         except Exception as e:
@@ -312,7 +367,6 @@ def install_server_status(client):
         await client.wait_until_ready()
 
     # discord.Client에는 add_listener()가 없으므로 setup_hook에 붙인다.
-    # setup_hook은 실제 이벤트 루프 안에서 실행되기 때문에 tasks.loop.start()가 안전하다.
     original_setup_hook = client.setup_hook
 
     async def setup_hook_with_server_status():
@@ -325,8 +379,6 @@ def install_server_status(client):
             )
 
     client.setup_hook = setup_hook_with_server_status
-
-    # tasks.loop 객체가 가비지 컬렉션되지 않도록 클라이언트에 보관한다.
     client._merjang_server_status_task = refresh_server_status
 
 
