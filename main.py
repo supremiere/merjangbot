@@ -10,7 +10,7 @@ from discord.ext import tasks
 # =========================================================
 # 머장봇 서버 상태 확장
 # - 기존 본체 코드는 app_core.py에 그대로 보존
-# - Railway 시작 명령은 기존처럼 python main.py
+# - CoredLab 시작 명령은 기존처럼 python main.py
 # =========================================================
 
 SERVER_STATUS_CHANNEL_ID = int(
@@ -166,9 +166,7 @@ def build_status_embed(data, now_utc):
 
     embed.add_field(
         name="🔄 마지막 확인",
-        value=(
-            f"**{now_utc.astimezone(KST).strftime('%Y-%m-%d %H:%M KST')}**"
-        ),
+        value=f"**{now_utc.astimezone(KST).strftime('%Y-%m-%d %H:%M KST')}**",
         inline=False,
     )
     embed.set_footer(
@@ -292,7 +290,12 @@ def install_server_status(client):
     async def before_refresh_server_status():
         await client.wait_until_ready()
 
-    async def server_status_on_ready():
+    # discord.Client에는 add_listener()가 없으므로 setup_hook에 붙인다.
+    # setup_hook은 실제 이벤트 루프 안에서 실행되기 때문에 tasks.loop.start()가 안전하다.
+    original_setup_hook = client.setup_hook
+
+    async def setup_hook_with_server_status():
+        await original_setup_hook()
         if not refresh_server_status.is_running():
             refresh_server_status.start()
             print(
@@ -300,7 +303,7 @@ def install_server_status(client):
                 f"(1분 주기 / 채널 ID {SERVER_STATUS_CHANNEL_ID})"
             )
 
-    client.add_listener(server_status_on_ready, "on_ready")
+    client.setup_hook = setup_hook_with_server_status
 
     # tasks.loop 객체가 가비지 컬렉션되지 않도록 클라이언트에 보관한다.
     client._merjang_server_status_task = refresh_server_status
