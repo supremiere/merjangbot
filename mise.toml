@@ -1,2 +1,3 @@
+# 배포 환경의 Python 버전을 지정합니다.
 [tools]
 python = "3.13"
