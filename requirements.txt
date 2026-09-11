@@ -1,3 +1,4 @@
+# 실행에 필요한 Python 라이브러리를 지정합니다.
 discord.py==2.7.1
 aiohttp>=3.10
 beautifulsoup4>=4.12
