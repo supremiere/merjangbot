@@ -1,4 +1,4 @@
-# 공식 공지·업데이트 HTML을 조회하고 게시물 목록으로 변환합니다.
+# 공식 공지·업데이트·에린 노트 HTML을 조회하고 게시물 목록으로 변환합니다.
 import re
 
 from bs4 import BeautifulSoup
@@ -8,15 +8,20 @@ from .models import Notice
 BASE_URL = "https://mabinogimobile.nexon.com"
 NOTICE_URL = f"{BASE_URL}/News/Notice"
 UPDATE_URL = f"{BASE_URL}/News/Update"
+DEVNOTE_URL = f"{BASE_URL}/News/Devnote"
+
+CATEGORY_PATTERNS = {
+    "공지": re.compile(r"^/News/Notice/\d+", re.IGNORECASE),
+    "업데이트": re.compile(r"^/News/Update/\d+", re.IGNORECASE),
+    "에린노트": re.compile(r"^/News/Devnote/\d+", re.IGNORECASE),
+}
 
 
 def parse_posts(html: str, category: str) -> list[Notice]:
     soup = BeautifulSoup(html, "html.parser")
-
-    if category == "공지":
-        pattern = re.compile(r"^/News/Notice/\d+", re.IGNORECASE)
-    else:
-        pattern = re.compile(r"^/News/Update/\d+", re.IGNORECASE)
+    pattern = CATEGORY_PATTERNS.get(category)
+    if pattern is None:
+        raise ValueError(f"지원하지 않는 공홈 게시판입니다: {category}")
 
     posts = []
     found_urls = set()
@@ -56,4 +61,5 @@ class OfficialNotices:
     async def fetch_all(self):
         notices = await self.get_posts(NOTICE_URL, "공지")
         updates = await self.get_posts(UPDATE_URL, "업데이트")
-        return notices, updates
+        devnotes = await self.get_posts(DEVNOTE_URL, "에린노트")
+        return notices, updates, devnotes
