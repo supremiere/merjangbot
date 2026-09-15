@@ -5,8 +5,9 @@ import logging
 import discord
 from discord import app_commands
 
-from discord_bot.commands import abyss, cleanup, market, rune_stats, sheets
+from discord_bot.commands import abyss, abyss_ranking, cleanup, market, rune_stats, sheets
 from discord_bot.jobs.abyss import AbyssJobs
+from discord_bot.jobs.abyss_ranking import AbyssRankingJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
 from discord_bot.jobs.notices import NoticeJobs
 from discord_bot.jobs.rune_stats import RuneStatsJobs
@@ -24,6 +25,7 @@ class MerjangBot(discord.Client):
         database,
         official,
         abyss_service,
+        abyss_ranking_service,
         market_service,
         sheet_service,
         maintenance_service,
@@ -38,6 +40,7 @@ class MerjangBot(discord.Client):
         self.database = database
         self.official = official
         self.abyss = abyss_service
+        self.abyss_ranking = abyss_ranking_service
         self.market = market_service
         self.sheets = sheet_service
         self.maintenance = maintenance_service
@@ -49,11 +52,12 @@ class MerjangBot(discord.Client):
         self._synced_guilds = set()
         self._global_commands_cleared = False
         self._sync_lock = asyncio.Lock()
-        for module in (abyss, market, sheets, cleanup, rune_stats):
+        for module in (abyss, market, sheets, cleanup, rune_stats, abyss_ranking):
             module.register(self)
         self.jobs = [
             NoticeJobs(self),
             AbyssJobs(self),
+            AbyssRankingJobs(self),
             ServerStatusJobs(self),
             DatabaseCleanupJobs(self),
             RuneStatsJobs(self),
@@ -62,6 +66,7 @@ class MerjangBot(discord.Client):
     async def setup_hook(self):
         self.database.initialize()
         self.rune_stats.load_cache()
+        self.abyss_ranking.load_cache()
         await self.http_client.start()
         for job in self.jobs:
             job.start()
@@ -109,6 +114,7 @@ class MerjangBot(discord.Client):
             job.stop()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+        await self.abyss_ranking.close()
         try:
             await super().close()
         finally:

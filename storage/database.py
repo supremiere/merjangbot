@@ -21,6 +21,9 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript("""
+                CREATE TABLE IF NOT EXISTS abyss_ranking_cache (
+                    id INTEGER PRIMARY KEY CHECK (id=1), data_json TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS rune_stats_cache (
                     class_name TEXT PRIMARY KEY,
                     data_json TEXT NOT NULL,
