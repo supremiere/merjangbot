@@ -7,6 +7,15 @@ class NoticeRepository:
         with self.db.connect() as conn:
             return conn.execute("SELECT COUNT(*) FROM sent_posts").fetchone()[0] == 0
 
+    def has_category(self, category):
+        with self.db.connect() as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM sent_posts WHERE category = ? LIMIT 1", (category,)
+                ).fetchone()
+                is not None
+            )
+
     def is_sent(self, url):
         with self.db.connect() as conn:
             return (
