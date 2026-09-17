@@ -40,4 +40,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS abyss_subscribers (
                     user_id INTEGER PRIMARY KEY, subscribed_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS server_open_subscribers (
+                    user_id INTEGER PRIMARY KEY, subscribed_at TEXT NOT NULL
+                );
             """)
