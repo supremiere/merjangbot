@@ -14,7 +14,7 @@ from storage.abyss_ranking import AbyssRankingRepository
 from storage.database import Database
 from storage.notices import NoticeRepository
 from storage.rune_stats import RuneStatsRepository
-from storage.subscriptions import SubscriptionRepository
+from storage.subscriptions import OpenSubscriptionRepository, SubscriptionRepository
 
 
 def create_bot(settings):
@@ -35,4 +35,5 @@ def create_bot(settings):
         notices=NoticeRepository(database),
         abyss_alerts=AbyssRepository(database),
         subscriptions=SubscriptionRepository(database),
+        open_subscriptions=OpenSubscriptionRepository(database),
     )
