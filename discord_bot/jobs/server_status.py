@@ -15,6 +15,22 @@ from discord_bot.presenters.server_status import (
 logger = logging.getLogger(__name__)
 
 
+def _mention_chunks(user_ids, max_length=1800):
+    chunks = []
+    current = ""
+    for user_id in user_ids:
+        mention = f"<@{user_id}>"
+        candidate = f"{current} {mention}" if current else mention
+        if len(candidate) > max_length and current:
+            chunks.append(current)
+            current = mention
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 class ServerStatusJobs:
     def __init__(self, bot):
         self.bot = bot
@@ -42,6 +58,28 @@ class ServerStatusJobs:
 
         return None
 
+    async def send_open_notification(self, channel):
+        user_ids = self.bot.open_subscriptions.list_ids()
+        chunks = _mention_chunks(user_ids)
+        if not chunks:
+            return
+
+        mentions = discord.AllowedMentions(
+            users=True, roles=False, everyone=False, replied_user=False
+        )
+        for chunk in chunks[:-1]:
+            await channel.send(content=chunk, allowed_mentions=mentions)
+
+        await channel.send(
+            content=(
+                f"{chunks[-1]}\n"
+                "🟢 **마비노기 모바일 서버가 오픈됐습니다!**\n"
+                "점검이 종료되어 정상 운영 상태로 전환됐습니다."
+            ),
+            allowed_mentions=mentions,
+        )
+        print(f"[서버상태] 오픈알림 전송: {len(user_ids)}명")
+
     async def update_once(self):
         channel = self.bot.get_channel(self.bot.settings.server_status_channel_id)
         if channel is None:
@@ -68,6 +106,7 @@ class ServerStatusJobs:
 
         now_utc = datetime.now(timezone.utc)
         is_maintenance = bool(data.get("is_maintenance"))
+        previous_state = self.state["last_state"]
         desired_name = build_status_channel_name(
             self.state["base_channel_name"],
             is_maintenance,
@@ -109,12 +148,21 @@ class ServerStatusJobs:
         except discord.HTTPException as e:
             print("[서버상태] 상태 메시지 갱신 실패:", e)
 
-        if (
-            self.state["last_state"] is None
-            or self.state["last_state"] != is_maintenance
-        ):
+        if previous_state is None or previous_state != is_maintenance:
             state_text = "점검 중" if is_maintenance else "정상 운영"
             print(f"[서버상태] 상태 확인: {state_text}")
+
+        # 오픈알림은 반드시 '점검 중(True) -> 정상(False)' 전환에만 보낸다.
+        # 시작 직후 정상 상태(None -> False)나 점검 시작(False -> True)에는 보내지 않는다.
+        if previous_state is True and is_maintenance is False:
+            try:
+                await self.send_open_notification(channel)
+            except discord.Forbidden:
+                print("[서버상태] 오픈알림 전송 권한이 없습니다.")
+            except discord.HTTPException as e:
+                print("[서버상태] 오픈알림 전송 실패:", e)
+            except Exception:
+                logger.exception("오픈알림 전송 오류")
 
         self.state["last_state"] = is_maintenance
 
