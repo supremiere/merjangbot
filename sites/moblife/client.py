@@ -1,8 +1,8 @@
-# 모비라이프의 프록시·OpenAPI 주소와 인증 헤더를 관리합니다.
+# 모비라이프와 OpenAPI 주소 및 인증 헤더를 관리합니다.
 class MoblifeClient:
     def __init__(self, http, settings):
         self.http = http
-        self.base_url = settings.moblife_proxy_base or "https://mabimobi.life"
+        self.base_url = "https://mabimobi.life"
         self.api_key = settings.moblife_api_key
         self.eab_key = settings.moblife_eab_key
         self.headers = {

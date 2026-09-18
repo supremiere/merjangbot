@@ -58,7 +58,7 @@
 | 모비라이프 점검 | `/d/api/v1/maintenance-status` API 조회 |
 | 에린 데이터 | `https://erinndata.pages.dev/cheatsheet/` HTML에서 직업별 텍스트·표 추출 |
 
-모비라이프 어비스·악보·점검은 기본 프록시를 사용하며 `MOBLIFE_PROXY_BASE`를 비우면 직접 조회합니다. 시세는 별도 OpenAPI 도메인으로 요청하며 인증 키를 프록시에 보내지 않습니다. 룬 통계는 에린 데이터에 직접 요청하고 API 키가 필요 없습니다.
+모비라이프 어비스·악보·점검·랭킹은 mabimobi.life에 직접 요청합니다. 시세는 별도 OpenAPI 도메인으로 요청합니다. 룬 통계는 에린 데이터에 직접 요청하고 API 키가 필요 없습니다.
 
 ## 프로젝트 구조와 파일별 역할
 
@@ -103,7 +103,7 @@ merjangbot-main/
 │  ├─ moblife/  # 모비라이프 API
 │  │  ├─ __init__.py  # 모비라이프의 어비스·시세·악보·점검 조회를 제공합니다.
 │  │  ├─ abyss.py  # 어비스 API 조회·복호화와 출현 주기·현재 상태·알림 시점을 계산합니다.
-│  │  ├─ client.py  # 모비라이프의 프록시·OpenAPI 주소와 인증 헤더를 관리합니다.
+│  │  ├─ client.py  # 모비라이프와 OpenAPI 주소 및 인증 헤더를 관리합니다.
 │  │  ├─ maintenance.py  # 점검 상태 API의 응답을 검증하고 시각·경과 시간을 계산합니다.
 │  │  ├─ market.py  # 시세 API를 조회하고 아이템 이름 검색·중복 제거·정렬을 수행합니다.
 │  │  ├─ models.py  # 모비라이프 조회 결과의 데이터 형식을 정의합니다.
@@ -183,7 +183,6 @@ Copy-Item .env.example .env
 | `SERVER_STATUS_CHANNEL_ID` | 서버 상태 채널. 예시 파일에 실제 ID 입력. 변수 자체가 없으면 기존 코드의 기본 ID 사용 |
 | `MOBLIFE_API_KEY` | 시세 조회용. 다른 기능에는 필수 아님 |
 | `DB_FILE` | 기본 `data.db`. 상대 경로는 프로젝트 폴더 기준, 절대 경로도 가능 |
-| `MOBLIFE_PROXY_BASE` | 기본값은 `.env.example` 참고. 빈 값이면 직접 조회 |
 | `MOBLIFE_EAB_KEY` | 선택. 어비스 복호화 키 재정의 |
 | `TZ` | 호스팅 환경 시간대. 표시 시각은 한국 시간으로 변환 |
 

@@ -6,7 +6,6 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_PROXY = "https://moblife-proxy.ninemailz.workers.dev"
 DEFAULT_EAB_KEY = "8nvov88uc5k4o4g6apax04783thjo11l"
 
 
@@ -18,7 +17,6 @@ class Settings:
     server_status_channel_id: int
     db_file: Path
     moblife_api_key: str = ""
-    moblife_proxy_base: str = DEFAULT_PROXY
     moblife_eab_key: str = DEFAULT_EAB_KEY
 
     @classmethod
@@ -50,8 +48,5 @@ class Settings:
             ),
             db_file=db_file,
             moblife_api_key=os.getenv("MOBLIFE_API_KEY", "").strip(),
-            moblife_proxy_base=os.getenv("MOBLIFE_PROXY_BASE", DEFAULT_PROXY)
-            .strip()
-            .rstrip("/"),
             moblife_eab_key=os.getenv("MOBLIFE_EAB_KEY", DEFAULT_EAB_KEY),
         )

@@ -24,6 +24,6 @@ TZ=Asia/Seoul
 Railway Volume Mount Path: /data
 
 기존 data.db를 그대로 사용할 수 있습니다. 룬 통계 캐시도 기존 테이블 형식을 유지합니다.
-MOBLIFE_PROXY_BASE는 선택 설정이며 빈 값이면 모비라이프에 직접 연결합니다.
+모비라이프 어비스·악보·점검·랭킹은 mabimobi.life에 직접 연결합니다.
 룬 통계는 에린 데이터에서 직접 조회하며 별도 API 키가 필요 없습니다.
 BOT_CHANNEL_ID는 원래 기능에서 사용되지 않던 설정으로 더 이상 필요하지 않습니다.
