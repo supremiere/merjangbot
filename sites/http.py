@@ -5,9 +5,19 @@ import aiohttp
 
 
 class HttpError(RuntimeError):
-    def __init__(self, status, url):
+    def __init__(self, status, url, *, headers=None, body=None):
         self.status = status
-        super().__init__(f"외부 데이터 요청 실패 (HTTP {status}): {url}")
+        headers = headers or {}
+        diagnostics = " ".join(
+            f"{name}={headers.get(name) or '-'}"
+            for name in (
+                "x-merjang-proxy", "x-merjang-stage", "server", "cf-ray", "cf-mitigated"
+            )
+        )
+        super().__init__(
+            f"외부 데이터 요청 실패 (HTTP {status}): {url} "
+            f"[{diagnostics}] body={body!r}"
+        )
 
 
 class HttpClient:
@@ -29,7 +39,10 @@ class HttpClient:
             raise RuntimeError("HTTP 클라이언트가 초기화되지 않았습니다.")
         async with self.session.get(url, headers=headers, params=params) as response:
             if response.status != 200:
-                raise HttpError(response.status, url)
+                body = (await response.content.read(1024)).decode(
+                    response.charset or "utf-8", errors="replace"
+                )
+                raise HttpError(response.status, url, headers=response.headers, body=body)
             return await response.text()
 
     async def get_json(self, url, *, headers=None, params=None):
