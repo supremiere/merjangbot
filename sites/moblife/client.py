@@ -6,8 +6,13 @@ class MoblifeClient:
         self.api_key = settings.moblife_api_key
         self.eab_key = settings.moblife_eab_key
         self.headers = {
-            "Accept": "application/json",
-            "User-Agent": "머장봇/1.0",
+            "Accept": "application/json,text/plain,*/*",
+            "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/152.0.0.0 Safari/537.36"
+            ),
             "Referer": self.base_url + "/",
         }
 
