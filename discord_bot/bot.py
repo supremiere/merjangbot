@@ -5,10 +5,11 @@ import logging
 import discord
 from discord import app_commands
 
-from discord_bot.commands import cleanup, market, rune_stats
+from discord_bot.commands import cleanup, market, rune_stats, server_status
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
 from discord_bot.jobs.notices import NoticeJobs
 from discord_bot.jobs.rune_stats import RuneStatsJobs
+from discord_bot.jobs.server_status import ServerStatusJobs
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +52,15 @@ class MerjangBot(discord.Client):
         self._synced_guilds = set()
         self._global_commands_cleared = False
         self._sync_lock = asyncio.Lock()
-        # 모비라이프 내부/프록시 API에 의존하는 기능은 일시 중단합니다.
-        # 유지: /시세(OpenAPI), /룬통계, /청소, 공식 공지 감시
-        # 중단: /어비스, /어구알림, /악보, /어비스랭킹, /오픈알림, 서버상태 감시
-        for module in (market, cleanup, rune_stats):
+        # 모비라이프 내부/프록시 API 의존 기능은 계속 중단합니다.
+        # 서버상태와 /오픈알림은 공식 점검 공지 기반으로 독립 복구합니다.
+        # 유지: /시세(OpenAPI), /룬통계, /청소, /오픈알림, 서버상태, 공식 공지 감시
+        # 중단: /어비스, /어구알림, /악보, /어비스랭킹
+        for module in (market, cleanup, rune_stats, server_status):
             module.register(self)
         self.jobs = [
             NoticeJobs(self),
+            ServerStatusJobs(self),
             DatabaseCleanupJobs(self),
             RuneStatsJobs(self),
         ]
