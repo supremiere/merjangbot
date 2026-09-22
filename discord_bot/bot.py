@@ -5,7 +5,7 @@ import logging
 import discord
 from discord import app_commands
 
-from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status
+from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot
 from discord_bot.jobs.abyss import AbyssJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
 from discord_bot.jobs.notices import NoticeJobs
@@ -55,9 +55,9 @@ class MerjangBot(discord.Client):
         self._sync_lock = asyncio.Lock()
         # 모비라이프 내부/프록시 API 없이 서버상태와 어비스 핵심 기능을 독립 운영합니다.
         # 유지: /시세(OpenAPI), /룬통계, /청소, /오픈알림, 서버상태,
-        #       /어비스, /어구알림, /어구제보, 공식 공지 감시
+        #       /어비스, /어구알림, /어구제보, /머장봇테스트, 공식 공지 감시
         # 중단: /악보, /어비스랭킹
-        for module in (market, cleanup, rune_stats, server_status, abyss):
+        for module in (market, cleanup, rune_stats, server_status, abyss, test_bot):
             module.register(self)
         self.jobs = [
             NoticeJobs(self),
