@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "timezone": "Asia/Seoul",
+  "observations": [
+    {
+      "date": "2026-09-22",
+      "maintenance_start": "2026-09-22T06:00:00+09:00",
+      "maintenance_end": "2026-09-22T08:45:00+09:00",
+      "first_abyss_after_maintenance": "2026-09-22T14:28:00+09:00",
+      "minutes_from_maintenance_end_to_first_abyss": 343,
+      "maintenance_source": "Mabinogi Mobile official notice 3549901",
+      "abyss_source": "manual observation/user report",
+      "note": "Single observation only. Do not infer a maintenance-to-abyss rule yet; append future /어구제보 observations and compare."
+    }
+  ]
+}
