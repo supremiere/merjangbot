@@ -109,6 +109,16 @@ class ServerStatusJobs:
             )
             return
 
+        # 완료된 점검 시작/종료시각을 어비스 추론용 데이터로도 저장한다.
+        try:
+            self.bot.abyss.note_maintenance(
+                data.get("last_maintenance_start_time"),
+                data.get("last_maintenance_end_time"),
+                data.get("last_maintenance_url"),
+            )
+        except Exception:
+            logger.exception("점검 이력 저장 오류")
+
         now_utc = datetime.now(timezone.utc)
         is_maintenance = bool(data.get("is_maintenance"))
         previous_state = self.state["last_state"]
