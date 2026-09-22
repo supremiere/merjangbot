@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import discord
 
-from sites.moblife.abyss import ABYSS_CYCLE, KST
+from services.abyss import ABYSS_CYCLE, KST
 
 WEEKDAYS_KO = ("월", "화", "수", "목", "금", "토", "일")
 
