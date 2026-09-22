@@ -11,38 +11,17 @@ from services.abyss import ABYSS_CYCLE, KST
 logger = logging.getLogger(__name__)
 
 TIME_ONLY_RE = re.compile(r"^(\d{1,2})\s*:\s*(\d{2})$")
-MONTH_DAY_RE = re.compile(
-    r"^(\d{1,2})\s*/\s*(\d{1,2})\s+(\d{1,2})\s*:\s*(\d{2})$"
-)
-FULL_DATE_RE = re.compile(
-    r"^(20\d{2})[-/.](\d{1,2})[-/.](\d{1,2})\s+(\d{1,2})\s*:\s*(\d{2})$"
-)
-
-
 def _parse_report_time(value, now_kst):
     value = (value or "").strip()
-
     match = TIME_ONLY_RE.match(value)
-    if match:
-        hour, minute = map(int, match.groups())
-        return now_kst.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if not match:
+        raise ValueError("시간만 HH:MM 형식으로 입력해주세요. 예: 14:28")
 
-    match = MONTH_DAY_RE.match(value)
-    if match:
-        month, day, hour, minute = map(int, match.groups())
-        year = now_kst.year
-        if now_kst.month == 1 and month == 12:
-            year -= 1
-        elif now_kst.month == 12 and month == 1:
-            year += 1
-        return datetime(year, month, day, hour, minute, tzinfo=KST)
+    hour, minute = map(int, match.groups())
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("올바른 시간을 입력해주세요. 예: 14:28")
 
-    match = FULL_DATE_RE.match(value)
-    if match:
-        year, month, day, hour, minute = map(int, match.groups())
-        return datetime(year, month, day, hour, minute, tzinfo=KST)
-
-    raise ValueError("시간 형식은 14:28 / 9/22 14:28 / 2026-09-22 14:28 중 하나로 입력해주세요.")
+    return now_kst.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
 
 def _format_kst(dt):
@@ -88,17 +67,17 @@ def register(bot):
         description="점검 후 첫 어구 시간을 제보해 어비스 기준 시간을 보정합니다.",
     )
     @discord.app_commands.describe(
-        시간="예: 14:28 / 9/22 14:28 / 2026-09-22 14:28"
+        시각="예: 14:28"
     )
     @discord.app_commands.default_permissions(manage_guild=True)
     async def abyss_report_command(
         interaction: discord.Interaction,
-        시간: str,
+        시각: str,
     ):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             now_kst = datetime.now(KST)
-            spawn_kst = _parse_report_time(시간, now_kst)
+            spawn_kst = _parse_report_time(시각, now_kst)
 
             try:
                 maintenance = await bot.maintenance.fetch()
