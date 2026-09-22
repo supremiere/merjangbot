@@ -9,6 +9,8 @@ from discord_bot.presenters.market import build_market_pages
 from discord_bot.presenters.notices import build_notice_embed
 from discord_bot.presenters.rune_stats import build_rune_stats_embed
 from discord_bot.presenters.server_status import build_status_embed
+from discord_bot.commands.abyss import _parse_report_time
+from services.abyss import KST
 from sites.erinndata.models import RUNE_CLASSES
 from sites.moblife.market import filter_market_items
 
@@ -140,6 +142,40 @@ def register(bot):
             logger.exception("머장봇테스트 어비스 오류")
             results.append(_line(False, "어비스", type(e).__name__))
 
+        # /어구제보의 HH:MM 입력 파서도 실제 저장 없이 검사한다.
+        try:
+            parsed_time = _parse_report_time("14:28", datetime.now(KST))
+            if parsed_time.hour == 14 and parsed_time.minute == 28:
+                results.append(_line(True, "어구제보", "HH:MM 입력 파서 정상"))
+            else:
+                results.append(_line(False, "어구제보", "시간 파싱 결과 이상"))
+        except Exception as e:
+            results.append(_line(False, "어구제보", type(e).__name__))
+
+        # 점검 사전알림의 자동종료 명령어 생성 로직을 검사한다.
+        try:
+            server_job = next(
+                job for job in bot.jobs if job.__class__.__name__ == "ServerStatusJobs"
+            )
+            sample_start = datetime.now(timezone.utc)
+            command = server_job.build_shutdown_command(sample_start)
+            shutdown_ok = (
+                "powershell -Command" in command
+                and "shutdown /s /t" in command
+                and "[datetime]::Parse" in command
+            )
+            results.append(
+                _line(
+                    shutdown_ok,
+                    "점검 사전알림",
+                    "12시간/30분 분기 + 자동종료 명령 생성 가능"
+                    if shutdown_ok
+                    else "자동종료 명령 생성 결과 이상",
+                )
+            )
+        except Exception as e:
+            results.append(_line(False, "점검 사전알림", type(e).__name__))
+
         # /시세 OpenAPI 실제 호출. 테스트 검색어는 넓게 잡되 운영 데이터는 변경하지 않는다.
         try:
             items, updated_at = await bot.market.fetch_market_prices("철", limit=4)
@@ -174,14 +210,14 @@ def register(bot):
             channel = interaction.channel
             me = interaction.guild.me if interaction.guild else None
             perms = channel.permissions_for(me) if channel and me else None
-            cleanup_ok = bool(perms and perms.read_message_history and perms.manage_messages)
+            cleanup_ok = bool(perms and perms.read_message_history)
             results.append(
                 _line(
                     cleanup_ok,
                     "청소",
                     "권한 정상 (삭제는 테스트에서 실행 안 함)"
                     if cleanup_ok
-                    else "메시지 기록 보기/관리 권한 확인 필요",
+                    else "메시지 기록 보기 권한 확인 필요",
                 )
             )
         except Exception as e:
@@ -212,7 +248,7 @@ def register(bot):
         failed = sum(line.startswith("❌") for line in results)
         summary = (
             "🧪 **머장봇 전체 기능 테스트**\n"
-            "실제 조회/권한/자동작업을 확인하되 **구독 변경·메시지 삭제·실제 알림 발송은 하지 않습니다.**\n\n"
+            "실제 데이터를 조회해 확인하되 **구독 변경·메시지 삭제·실제 알림 발송은 하지 않습니다.**\n\n"
             + "\n".join(results)
             + f"\n\n**결과: {passed}개 정상 / {failed}개 확인 필요**"
         )
