@@ -1,7 +1,7 @@
 # /어비스 조회, /어구알림 구독, /어구제보 기준점 보정을 처리합니다.
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import discord
 
@@ -25,10 +25,7 @@ def _parse_report_time(value, now_kst):
     match = TIME_ONLY_RE.match(value)
     if match:
         hour, minute = map(int, match.groups())
-        result = now_kst.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if result > now_kst + timedelta(minutes=5):
-            result -= timedelta(days=1)
-        return result
+        return now_kst.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     match = MONTH_DAY_RE.match(value)
     if match:
