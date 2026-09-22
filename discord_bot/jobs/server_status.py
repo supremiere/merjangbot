@@ -1,6 +1,6 @@
 # 공식 점검 공지를 20초마다 확인하고 채널명·상태 메시지·오픈알림을 갱신합니다.
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord.ext import tasks
@@ -63,46 +63,82 @@ class ServerStatusJobs:
 
         return None
 
-    def reminder_sent(self, maintenance_start):
+    def reminder_sent(self, maintenance_start, reminder_kind):
         with self.bot.database.connect() as conn:
             return (
                 conn.execute(
-                    "SELECT 1 FROM maintenance_reminders WHERE maintenance_start = ?",
-                    (maintenance_start,),
+                    """
+                    SELECT 1 FROM maintenance_reminder_events
+                    WHERE maintenance_start = ? AND reminder_kind = ?
+                    """,
+                    (maintenance_start, reminder_kind),
                 ).fetchone()
                 is not None
             )
 
-    def mark_reminder_sent(self, maintenance_start, sent_at):
+    def mark_reminder_sent(self, maintenance_start, reminder_kind, sent_at):
         with self.bot.database.connect() as conn:
             conn.execute(
                 """
-                INSERT OR IGNORE INTO maintenance_reminders
-                    (maintenance_start, sent_at)
-                VALUES (?, ?)
+                INSERT OR IGNORE INTO maintenance_reminder_events
+                    (maintenance_start, reminder_kind, sent_at)
+                VALUES (?, ?, ?)
                 """,
-                (maintenance_start, sent_at),
+                (maintenance_start, reminder_kind, sent_at),
             )
+
+    def build_shutdown_command(self, start):
+        kst = timezone(timedelta(hours=9))
+        local_start = start.astimezone(kst)
+        target = local_start.strftime("%Y-%m-%d %H:%M")
+        return (
+            "powershell -Command \"$t=[datetime]::Parse('"
+            + target
+            + "'); shutdown /s /t ([Math]::Max(0,[int]($t-(Get-Date)).TotalSeconds))\""
+        )
 
     async def send_maintenance_reminder(self, channel, data, now_utc):
         start_text = data.get("next_maintenance_start_time")
-        if not start_text or self.reminder_sent(start_text):
+        if not start_text:
             return
 
         start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
         seconds_left = (start - now_utc).total_seconds()
-
-        # 공지 발견이 정확히 12시간 전이 아니어도, 12시간 이내에 발견한 예정 점검은
-        # 아직 시작 전이라면 한 번만 안내한다.
-        if not (0 < seconds_left <= 12 * 60 * 60):
+        if seconds_left <= 0:
             return
 
+        kst = timezone(timedelta(hours=9))
+        local_start = start.astimezone(kst)
+
+        # 06:00 점검은 12시간 전, 그 외 임시/긴급 점검은 30분 전에 안내한다.
+        if local_start.hour == 6 and local_start.minute == 0:
+            reminder_kind = "12h"
+            threshold = 12 * 60 * 60
+            headline = (
+                "⚠️ **12시간 뒤에 마비노기 모바일 점검이 시작됩니다. "
+                "햄순이 가동에 참고해주세요.**"
+            )
+        else:
+            reminder_kind = "30m"
+            threshold = 30 * 60
+            headline = (
+                "⚠️ **30분 뒤에 마비노기 모바일 점검이 시작됩니다. "
+                "햄순이 가동에 참고해주세요.**"
+            )
+
+        if seconds_left > threshold or self.reminder_sent(start_text, reminder_kind):
+            return
+
+        command = self.build_shutdown_command(start)
         await channel.send(
-            "⚠️ **12시간 뒤에 마비노기 모바일 점검이 시작됩니다. "
-            "햄순이 가동에 참고해주세요.**"
+            headline
+            + f"\n점검 시작: **{local_start.month}/{local_start.day} "
+            + f"{local_start.hour:02d}:{local_start.minute:02d}**"
+            + "\n햄순이 자동종료 예약 명령어:"
+            + f"\n```powershell\n{command}\n```"
         )
-        self.mark_reminder_sent(start_text, now_utc.isoformat())
-        print(f"[서버상태] 점검 12시간 전 안내 전송: {start_text}")
+        self.mark_reminder_sent(start_text, reminder_kind, now_utc.isoformat())
+        print(f"[서버상태] 점검 사전안내 전송({reminder_kind}): {start_text}")
 
     async def send_open_notification(self, channel):
         user_ids = self.bot.open_subscriptions.list_ids()
