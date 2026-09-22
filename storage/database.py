@@ -58,4 +58,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS server_open_subscribers (
                     user_id INTEGER PRIMARY KEY, subscribed_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS maintenance_reminders (
+                    maintenance_start TEXT PRIMARY KEY,
+                    sent_at TEXT NOT NULL
+                );
             """)
