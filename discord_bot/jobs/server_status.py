@@ -1,4 +1,4 @@
-# 점검 상태에 따라 채널명과 기존 상태 메시지를 1분마다 갱신합니다.
+# 공식 점검 공지를 20초마다 확인하고 채널명·상태 메시지·오픈알림을 갱신합니다.
 import logging
 from datetime import datetime, timezone
 
@@ -34,7 +34,12 @@ def _mention_chunks(user_ids, max_length=1800):
 class ServerStatusJobs:
     def __init__(self, bot):
         self.bot = bot
-        self.state = {"message": None, "last_state": None, "base_channel_name": None}
+        self.state = {
+            "message": None,
+            "last_state": None,
+            "base_channel_name": None,
+            "last_render_at": None,
+        }
 
     async def find_existing_message(self, channel):
         if self.bot.user is None:
@@ -94,12 +99,12 @@ class ServerStatusJobs:
                 getattr(channel, "name", "")
             )
 
-        # API 오류는 점검으로 오인하지 않고 기존 상태를 유지한다.
+        # 공식 점검 공지 조회 오류는 점검으로 오인하지 않고 기존 상태를 유지한다.
         try:
             data = await self.bot.maintenance.fetch()
         except Exception as e:
             print(
-                "[서버상태] 모비라이프 상태 확인 실패 - 기존 상태 유지:",
+                "[서버상태] 공식 점검 공지 확인 실패 - 기존 상태 유지:",
                 e,
             )
             return
@@ -128,25 +133,38 @@ class ServerStatusJobs:
             except discord.HTTPException as e:
                 print("[서버상태] 채널명 변경 실패:", e)
 
-        embed = build_status_embed(data, now_utc)
+        state_changed = (
+            previous_state is not None and previous_state != is_maintenance
+        )
+        last_render_at = self.state["last_render_at"]
+        render_due = (
+            self.state["message"] is None
+            or last_render_at is None
+            or state_changed
+            or (now_utc - last_render_at).total_seconds() >= 60
+        )
 
-        try:
-            if self.state["message"] is None:
-                self.state["message"] = await self.find_existing_message(channel)
+        # 점검 여부는 20초마다 확인하되 디스코드 메시지는 1분마다 또는 상태 전환 때만 갱신한다.
+        if render_due:
+            embed = build_status_embed(data, now_utc)
+            try:
+                if self.state["message"] is None:
+                    self.state["message"] = await self.find_existing_message(channel)
 
-            if self.state["message"] is None:
-                self.state["message"] = await channel.send(embed=embed)
-                print(f"[서버상태] 상태 메시지 생성: {self.state['message'].id}")
-            else:
-                try:
-                    await self.state["message"].edit(embed=embed)
-                except discord.NotFound:
+                if self.state["message"] is None:
                     self.state["message"] = await channel.send(embed=embed)
-                    print(f"[서버상태] 상태 메시지 재생성: {self.state['message'].id}")
-        except discord.Forbidden:
-            print("[서버상태] 메시지 전송/수정 권한이 없습니다.")
-        except discord.HTTPException as e:
-            print("[서버상태] 상태 메시지 갱신 실패:", e)
+                    print(f"[서버상태] 상태 메시지 생성: {self.state['message'].id}")
+                else:
+                    try:
+                        await self.state["message"].edit(embed=embed)
+                    except discord.NotFound:
+                        self.state["message"] = await channel.send(embed=embed)
+                        print(f"[서버상태] 상태 메시지 재생성: {self.state['message'].id}")
+                self.state["last_render_at"] = now_utc
+            except discord.Forbidden:
+                print("[서버상태] 메시지 전송/수정 권한이 없습니다.")
+            except discord.HTTPException as e:
+                print("[서버상태] 상태 메시지 갱신 실패:", e)
 
         if previous_state is None or previous_state != is_maintenance:
             state_text = "점검 중" if is_maintenance else "정상 운영"
@@ -166,7 +184,7 @@ class ServerStatusJobs:
 
         self.state["last_state"] = is_maintenance
 
-    @tasks.loop(minutes=1)
+    @tasks.loop(seconds=20)
     async def poll(self):
         try:
             await self.update_once()
