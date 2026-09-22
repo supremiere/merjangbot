@@ -5,7 +5,7 @@ from sites.http import HttpClient
 from sites.moblife.abyss import AbyssService
 from sites.moblife.abyss_ranking import AbyssRankingService
 from sites.moblife.client import MoblifeClient
-from sites.moblife.maintenance import MaintenanceService
+from sites.official.maintenance import OfficialMaintenanceService
 from sites.moblife.market import MarketService
 from sites.moblife.sheets import SheetService
 from sites.official.notices import OfficialNotices
@@ -31,7 +31,7 @@ def create_bot(settings):
         abyss_ranking_service=AbyssRankingService(moblife, AbyssRankingRepository(database)),
         market_service=MarketService(moblife),
         sheet_service=SheetService(moblife),
-        maintenance_service=MaintenanceService(moblife),
+        maintenance_service=OfficialMaintenanceService(http),
         notices=NoticeRepository(database),
         abyss_alerts=AbyssRepository(database),
         subscriptions=SubscriptionRepository(database),
