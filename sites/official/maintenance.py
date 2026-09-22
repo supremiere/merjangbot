@@ -41,6 +41,7 @@ TITLE_RANGE_RE = re.compile(
     r"\((\d{1,2})\s*:\s*(\d{2})\s*~\s*"
     r"(\d{1,2})\s*:\s*(\d{2})\)"
 )
+COMPLETED_TITLE_RE = re.compile(r"\(완료\)")
 
 
 def _text_from_html(html):
@@ -84,6 +85,27 @@ def _parse_start(title, text, now_kst):
         return None
 
 
+def _parse_title_completion(title, maintenance_start):
+    """검증된 게임 점검 공지의 '(완료)' 제목에 적힌 종료 시각을 읽는다."""
+    if not COMPLETED_TITLE_RE.search(title or ""):
+        return None
+
+    time_range = TITLE_RANGE_RE.search(title or "")
+    if time_range is None or maintenance_start is None:
+        return None
+
+    end_hour, end_minute = map(int, time_range.groups()[2:])
+    try:
+        completed = maintenance_start.replace(hour=end_hour, minute=end_minute)
+    except ValueError:
+        return None
+
+    # 자정을 넘기는 점검도 처리한다.
+    if completed < maintenance_start:
+        completed += timedelta(days=1)
+    return completed
+
+
 def _parse_completion(text, maintenance_start):
     matches = list(COMPLETION_RE.finditer(text))
     if not matches:
@@ -124,7 +146,14 @@ def parse_maintenance_notice(title, html, now_utc=None):
     if start is None:
         return None
 
-    completed_at = _parse_completion(text, start)
+    # 1순위: 실제 완료 공지 제목의 종료 시각.
+    # 넥슨은 조기/연장 종료 시 '(완료) ... (시작 ~ 실제 종료)' 형태로 제목을 갱신한다.
+    # 단, 위에서 이미 '게임 점검 공지 + 전체 서버'를 검증했으므로 다른 '(완료)' 글과 혼동하지 않는다.
+    completed_at = _parse_title_completion(title, start)
+
+    # 2순위: 본문 완료 문구 + 업데이트 시각.
+    if completed_at is None:
+        completed_at = _parse_completion(text, start)
     return {
         "title": title,
         "start": start,
