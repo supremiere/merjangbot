@@ -22,9 +22,9 @@ def parse_iso_datetime(value):
 class LocalAbyssService:
     def __init__(self, repository):
         self.repository = repository
-        self.anchor = None
+        # DB 초기화 전에도 객체를 만들 수 있게 기본 기준점만 메모리에 둔다.
+        self.anchor = INITIAL_ANCHOR_KST.astimezone(timezone.utc)
         self.last_maintenance = None
-        self.refresh()
 
     async def refresh_async(self):
         self.refresh()
