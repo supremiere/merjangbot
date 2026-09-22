@@ -37,6 +37,21 @@ class Database:
                     spawn_time TEXT NOT NULL, minutes_before INTEGER NOT NULL,
                     PRIMARY KEY (spawn_time, minutes_before)
                 );
+                CREATE TABLE IF NOT EXISTS abyss_maintenance_events (
+                    end_time TEXT PRIMARY KEY,
+                    start_time TEXT,
+                    source_url TEXT,
+                    observed_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS abyss_observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    spawn_time TEXT NOT NULL UNIQUE,
+                    maintenance_start TEXT,
+                    maintenance_end TEXT,
+                    reported_by INTEGER,
+                    reported_at TEXT NOT NULL,
+                    source TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS abyss_subscribers (
                     user_id INTEGER PRIMARY KEY, subscribed_at TEXT NOT NULL
                 );
