@@ -25,6 +25,7 @@ class LocalAbyssService:
         # DB 초기화 전에도 객체를 만들 수 있게 기본 기준점만 메모리에 둔다.
         self.anchor = INITIAL_ANCHOR_KST.astimezone(timezone.utc)
         self.last_maintenance = None
+        self.maintenance_active = False
 
     async def refresh(self):
         observation = self.repository.latest_observation()
@@ -46,14 +47,22 @@ class LocalAbyssService:
         )
         self.last_maintenance = self.repository.latest_maintenance()
 
+    def set_maintenance_active(self, active):
+        self.maintenance_active = bool(active)
+
     @property
     def needs_report(self):
+        if self.maintenance_active:
+            return True
         if self.anchor is None or not self.last_maintenance:
             return self.anchor is None
         end = parse_iso_datetime(self.last_maintenance.get("end_time"))
         return end is not None and self.anchor <= end
 
     def report_spawn(self, spawn_time, reported_by):
+        if self.maintenance_active:
+            raise ValueError("현재 점검 중이라 첫 어구 기준시간을 확정할 수 없습니다.")
+
         spawn = spawn_time.astimezone(timezone.utc)
         maintenance = self.repository.latest_maintenance()
         maintenance_start = maintenance.get("start_time") if maintenance else None
