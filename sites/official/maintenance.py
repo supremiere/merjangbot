@@ -209,17 +209,28 @@ class OfficialMaintenanceService:
             ]
             active_notice = max(active, key=lambda item: item["start"]) if active else None
 
-            completed = [
-                item["completed_at"]
-                for item in observations
-                if item["completed_at"] is not None
+            completed_items = [
+                item for item in observations if item["completed_at"] is not None
             ]
-            last_end = max(completed) if completed else None
+            last_completed = (
+                max(completed_items, key=lambda item: item["completed_at"])
+                if completed_items
+                else None
+            )
+            last_end = last_completed["completed_at"] if last_completed else None
 
             return {
                 "is_maintenance": active_notice is not None,
+                "last_maintenance_start_time": (
+                    last_completed["start"].astimezone(timezone.utc).isoformat()
+                    if last_completed
+                    else None
+                ),
                 "last_maintenance_end_time": (
                     last_end.astimezone(timezone.utc).isoformat() if last_end else None
+                ),
+                "last_maintenance_url": (
+                    last_completed.get("url") if last_completed else None
                 ),
                 "current_maintenance_start_time": (
                     active_notice["start"].astimezone(timezone.utc).isoformat()
