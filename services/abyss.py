@@ -26,10 +26,7 @@ class LocalAbyssService:
         self.anchor = INITIAL_ANCHOR_KST.astimezone(timezone.utc)
         self.last_maintenance = None
 
-    async def refresh_async(self):
-        self.refresh()
-
-    def refresh(self):
+    async def refresh(self):
         observation = self.repository.latest_observation()
         if observation:
             self.anchor = parse_iso_datetime(observation["spawn_time"])
