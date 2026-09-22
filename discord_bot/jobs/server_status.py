@@ -63,6 +63,47 @@ class ServerStatusJobs:
 
         return None
 
+    def reminder_sent(self, maintenance_start):
+        with self.bot.database.connect() as conn:
+            return (
+                conn.execute(
+                    "SELECT 1 FROM maintenance_reminders WHERE maintenance_start = ?",
+                    (maintenance_start,),
+                ).fetchone()
+                is not None
+            )
+
+    def mark_reminder_sent(self, maintenance_start, sent_at):
+        with self.bot.database.connect() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO maintenance_reminders
+                    (maintenance_start, sent_at)
+                VALUES (?, ?)
+                """,
+                (maintenance_start, sent_at),
+            )
+
+    async def send_maintenance_reminder(self, channel, data, now_utc):
+        start_text = data.get("next_maintenance_start_time")
+        if not start_text or self.reminder_sent(start_text):
+            return
+
+        start = datetime.fromisoformat(start_text.replace("Z", "+00:00"))
+        seconds_left = (start - now_utc).total_seconds()
+
+        # 공지 발견이 정확히 12시간 전이 아니어도, 12시간 이내에 발견한 예정 점검은
+        # 아직 시작 전이라면 한 번만 안내한다.
+        if not (0 < seconds_left <= 12 * 60 * 60):
+            return
+
+        await channel.send(
+            "⚠️ **12시간 뒤에 마비노기 모바일 점검이 시작됩니다. "
+            "햄순이 가동에 참고해주세요.**"
+        )
+        self.mark_reminder_sent(start_text, now_utc.isoformat())
+        print(f"[서버상태] 점검 12시간 전 안내 전송: {start_text}")
+
     async def send_open_notification(self, channel):
         user_ids = self.bot.open_subscriptions.list_ids()
         chunks = _mention_chunks(user_ids)
@@ -123,6 +164,16 @@ class ServerStatusJobs:
             logger.exception("점검 이력 저장 오류")
 
         now_utc = datetime.now(timezone.utc)
+
+        try:
+            await self.send_maintenance_reminder(channel, data, now_utc)
+        except discord.Forbidden:
+            print("[서버상태] 점검 사전안내 전송 권한이 없습니다.")
+        except discord.HTTPException as e:
+            print("[서버상태] 점검 사전안내 전송 실패:", e)
+        except Exception:
+            logger.exception("점검 사전안내 처리 오류")
+
         previous_state = self.state["last_state"]
         desired_name = build_status_channel_name(
             self.state["base_channel_name"],
