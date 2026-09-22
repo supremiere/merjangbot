@@ -209,6 +209,13 @@ class OfficialMaintenanceService:
             ]
             active_notice = max(active, key=lambda item: item["start"]) if active else None
 
+            upcoming = [
+                item
+                for item in observations
+                if item["start"] > now_kst and item["completed_at"] is None
+            ]
+            next_notice = min(upcoming, key=lambda item: item["start"]) if upcoming else None
+
             completed_items = [
                 item for item in observations if item["completed_at"] is not None
             ]
@@ -236,5 +243,13 @@ class OfficialMaintenanceService:
                     active_notice["start"].astimezone(timezone.utc).isoformat()
                     if active_notice
                     else None
+                ),
+                "next_maintenance_start_time": (
+                    next_notice["start"].astimezone(timezone.utc).isoformat()
+                    if next_notice
+                    else None
+                ),
+                "next_maintenance_url": (
+                    next_notice.get("url") if next_notice else None
                 ),
             }
