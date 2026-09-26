@@ -343,7 +343,7 @@ class TrainPassengerView(discord.ui.View):
                 "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        await interaction.response.defer(ephemeral=True)
         try:
             async with self.controller.lock_for(interaction.guild.id):
                 car_no = self.controller.repository.leave(
@@ -753,7 +753,7 @@ class TrainPanelView(discord.ui.View):
                 "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             async with self.controller.lock_for(interaction.guild.id):
                 existing = self.controller.repository.find_user(
@@ -776,21 +776,21 @@ class TrainPanelView(discord.ui.View):
             panel_ok = await self.controller.ensure_panel(interaction.guild)
             await self.controller.announce_train_arrival(interaction.guild, car_no)
             await interaction.edit_original_response(
-                (
+                content=(
                     f"🚆 {car_no}호차를 만들었습니다. 기장으로 등록했습니다."
                     + self.controller.panel_suffix(panel_ok)
                 ),
             )
         except TrainStateError as error:
             await interaction.edit_original_response(
-                await self.controller.error_text(
+                content=await self.controller.error_text(
                     interaction.guild, error, interaction.user.id
                 ),
             )
         except Exception:
             logger.exception("좌석도 새 열차 만들기 오류")
             await interaction.edit_original_response(
-                "열차 생성 처리 중 오류가 발생했습니다.",
+                content="열차 생성 처리 중 오류가 발생했습니다.",
             )
 
     @discord.ui.button(
@@ -888,21 +888,21 @@ class TrainPanelView(discord.ui.View):
                 )
             panel_ok = await self.controller.ensure_panel(interaction.guild)
             await interaction.edit_original_response(
-                (
+                content=(
                     f"👋 {car_no}호차에서 하차했습니다."
                     + self.controller.panel_suffix(panel_ok)
                 ),
             )
         except TrainStateError as error:
             await interaction.edit_original_response(
-                await self.controller.error_text(
+                content=await self.controller.error_text(
                     interaction.guild, error, interaction.user.id
                 ),
             )
         except Exception:
             logger.exception("좌석도 내 열차 하차 오류")
             await interaction.edit_original_response(
-                "하차 처리 중 오류가 발생했습니다.",
+                content="하차 처리 중 오류가 발생했습니다.",
             )
 
     @discord.ui.button(
