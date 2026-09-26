@@ -450,6 +450,239 @@ class TrainBoardPickerView(discord.ui.View):
         return False
 
 
+async def build_passenger_manage_view(controller, guild, requester_id, car_no):
+    state = controller.repository.snapshot(guild.id).get(int(car_no))
+    if state is None or state["conductor_id"] != int(requester_id):
+        return (
+            "현재 기장으로 운행 중인 열차가 없습니다.",
+            None,
+        )
+
+    passenger_ids = list(state["passenger_ids"])
+    passenger_options = []
+    passenger_names = []
+    for user_id in passenger_ids:
+        member = guild.get_member(int(user_id))
+        if member is None:
+            try:
+                member = await guild.fetch_member(int(user_id))
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                member = None
+        name = member.display_name if member is not None else f"사용자 {int(user_id)}"
+        passenger_names.append(discord.utils.escape_markdown(name))
+        passenger_options.append(
+            discord.SelectOption(
+                label=name[:100],
+                value=str(int(user_id)),
+                description=f"{int(car_no)}호차에서 하차시키기",
+                emoji="🚪",
+            )
+        )
+
+    count = 1 + len(passenger_ids)
+    content = (
+        f"👥 **{int(car_no)}호차 승객 관리**\n"
+        f"현재 좌석: {count}/{TRAIN_CAPACITY}\n"
+        f"승객: {', '.join(passenger_names) if passenger_names else '-'}"
+    )
+    return (
+        content,
+        TrainPassengerManageView(
+            controller,
+            requester_id,
+            car_no,
+            passenger_options,
+            can_add=count < TRAIN_CAPACITY,
+        ),
+    )
+
+
+class TrainPassengerAddSelect(discord.ui.UserSelect):
+    def __init__(self, controller, requester_id, car_no):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        super().__init__(
+            placeholder="➕ 추가할 승객을 선택하세요",
+            min_values=1,
+            max_values=1,
+            custom_id=f"train:manage:add:{self.car_no}",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        target = self.values[0]
+        if getattr(target, "bot", False):
+            await interaction.response.send_message(
+                "봇 계정은 승객으로 추가할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.add_passenger(
+                    interaction.guild.id,
+                    self.car_no,
+                    interaction.user.id,
+                    target.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_passenger_manage_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            name = discord.utils.escape_markdown(
+                getattr(target, "display_name", target.name)
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"➕ {name}님을 {self.car_no}호차에 추가했습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("좌석도 승객 추가 UI 오류")
+            await interaction.edit_original_response(
+                content="승객 추가 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainPassengerRemoveSelect(discord.ui.Select):
+    def __init__(self, controller, requester_id, car_no, passenger_options):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        super().__init__(
+            placeholder="➖ 하차시킬 승객을 선택하세요",
+            min_values=1,
+            max_values=1,
+            options=passenger_options,
+            custom_id=f"train:manage:remove:{self.car_no}",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        user_id = int(self.values[0])
+        member = interaction.guild.get_member(user_id)
+        name = (
+            discord.utils.escape_markdown(member.display_name)
+            if member is not None
+            else f"사용자 {user_id}"
+        )
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.remove_passenger(
+                    interaction.guild.id,
+                    self.car_no,
+                    interaction.user.id,
+                    user_id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_passenger_manage_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"➖ {name}님을 {self.car_no}호차에서 하차시켰습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("좌석도 승객 하차 UI 오류")
+            await interaction.edit_original_response(
+                content="승객 하차 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainPassengerManageView(discord.ui.View):
+    def __init__(
+        self,
+        controller,
+        requester_id,
+        car_no,
+        passenger_options,
+        *,
+        can_add,
+    ):
+        super().__init__(timeout=180)
+        self.requester_id = int(requester_id)
+        if can_add:
+            self.add_item(
+                TrainPassengerAddSelect(controller, requester_id, car_no)
+            )
+        if passenger_options:
+            self.add_item(
+                TrainPassengerRemoveSelect(
+                    controller,
+                    requester_id,
+                    car_no,
+                    passenger_options,
+                )
+            )
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+            ephemeral=True,
+        )
+        return False
+
+
 class TrainPanelView(discord.ui.View):
     """좌석도 메시지에 항상 붙어 있는 사용자용 열차 UI."""
 
@@ -630,6 +863,46 @@ class TrainPanelView(discord.ui.View):
                 "하차 처리 중 오류가 발생했습니다.",
                 ephemeral=True,
             )
+
+    @discord.ui.button(
+        label="승객 관리",
+        emoji="👥",
+        style=discord.ButtonStyle.secondary,
+        custom_id="train:panel:passengers",
+    )
+    async def manage_passengers(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        seat = self.controller.repository.find_user(
+            interaction.guild.id, interaction.user.id
+        )
+        if seat is None or seat.role != "conductor":
+            await interaction.response.send_message(
+                "현재 기장으로 운행 중인 열차가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        content, view = await build_passenger_manage_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+            seat.car_no,
+        )
+        await interaction.response.send_message(
+            content,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=NO_MENTIONS,
+        )
 
     @discord.ui.button(
         label="내 열차 종료",
