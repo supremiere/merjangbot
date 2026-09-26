@@ -11,7 +11,8 @@ logger = logging.getLogger(__name__)
 
 CHANNEL_NAME = "우만열차좌석도"
 CHAT_CHANNEL_NAME = "💬자유-채팅"
-PANEL_TITLE = "🚆 **우만열차 좌석도**"
+PANEL_TITLE = "🚉 **우만역 · 열차 운행 안내**"
+LEGACY_PANEL_TITLES = ("🚆 **우만열차 좌석도**",)
 TRAIN_ADMIN_ROLES = {"자발적 봉사자", "봉사하는 노예", "머장", "관리자"}
 NO_MENTIONS = discord.AllowedMentions.none()
 
@@ -86,7 +87,10 @@ class TrainController:
         lines = [
             PANEL_TITLE,
             "",
-            "아래 버튼으로 열차를 만들고 탑승·하차할 수 있습니다.",
+            "📢 탑승하실 열차를 확인해주세요.",
+            "빈 좌석이 있는 열차는 아래 `열차 탑승` 버튼으로 이용할 수 있습니다.",
+            "",
+            "━━━━━━━━━━━━━━━━━━",
             "",
         ]
 
@@ -96,7 +100,14 @@ class TrainController:
             if snapshot[car_no]["conductor_id"] is not None
         ]
         if not active_cars:
-            lines.append("현재 운행 중인 열차가 없습니다.")
+            lines.extend(
+                [
+                    "📢 현재 플랫폼에 대기 중인 열차가 없습니다.",
+                    "",
+                    "🚆 `새 열차 만들기`를 눌러",
+                    "첫 번째 열차를 운행해주세요.",
+                ]
+            )
             return "\n".join(lines)
 
         for car_no in active_cars:
@@ -111,13 +122,16 @@ class TrainController:
                 await self.display_name(guild, user_id)
                 for user_id in passengers
             ]
-            passenger_text = ", ".join(passenger_names) if passenger_names else "-"
+            passenger_text = " · ".join(passenger_names) if passenger_names else "승객 없음"
 
             lines.extend(
                 [
-                    f"**{car_no}호차**  {icon} {status} · `{count}/{TRAIN_CAPACITY}`",
-                    f"기장 : {conductor_name}",
-                    f"승객 : {passenger_text}",
+                    f"┏━━━━━━ 🚃 {car_no}호차 ━━━━━━┓",
+                    f"┃  {icon} {status}  ·  `{count} / {TRAIN_CAPACITY}`",
+                    "┃",
+                    f"┃  👨‍✈️ 기장  {conductor_name}",
+                    f"┃  💺 승객  {passenger_text}",
+                    "┗━━━━━━◉━━━━◉━━━━━━┛",
                     "",
                 ]
             )
@@ -171,7 +185,13 @@ class TrainController:
                     if (
                         self.bot.user is not None
                         and candidate.author.id == self.bot.user.id
-                        and candidate.content.startswith(PANEL_TITLE)
+                        and (
+                            candidate.content.startswith(PANEL_TITLE)
+                            or any(
+                                candidate.content.startswith(title)
+                                for title in LEGACY_PANEL_TITLES
+                            )
+                        )
                     ):
                         message = candidate
                         break
