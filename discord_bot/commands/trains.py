@@ -10,6 +10,7 @@ from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
 logger = logging.getLogger(__name__)
 
 CHANNEL_NAME = "우만열차좌석도"
+CHAT_CHANNEL_NAME = "💬자유-채팅"
 PANEL_TITLE = "🚆 **우만열차 좌석도**"
 TRAIN_ADMIN_ROLES = {"자발적 봉사자", "봉사하는 노예", "머장", "관리자"}
 NO_MENTIONS = discord.AllowedMentions.none()
@@ -222,6 +223,33 @@ class TrainController:
                     )
         return True
 
+    async def announce_train_arrival(self, guild, car_no):
+        channel = discord.utils.get(guild.text_channels, name=CHAT_CHANNEL_NAME)
+        if channel is None:
+            # 일부 서버/클라이언트에서 이모지 없이 채널명이 구성된 경우도 허용합니다.
+            channel = discord.utils.get(guild.text_channels, name="자유-채팅")
+        if channel is None:
+            logger.warning(
+                "%s 서버에서 #%s 채널을 찾지 못해 열차 도착 안내를 보내지 못했습니다.",
+                guild.name,
+                CHAT_CHANNEL_NAME,
+            )
+            return False
+
+        try:
+            await channel.send(
+                f"🚆 {car_no}호차가 플랫폼에 도착했습니다. 서둘러 탑승해주세요!",
+                allowed_mentions=NO_MENTIONS,
+            )
+            return True
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception(
+                "%s 채널에 %s호차 도착 안내 전송 실패",
+                CHAT_CHANNEL_NAME,
+                car_no,
+            )
+            return False
+
     async def ensure_all_panels(self):
         for guild in self.bot.guilds:
             try:
@@ -363,6 +391,7 @@ def register(bot):
                     [member.id for member in passengers],
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
+            await controller.announce_train_arrival(interaction.guild, 호차)
             await interaction.followup.send(
                 f"🚆 {호차}호차 출발! 기장으로 등록했습니다."
                 + controller.panel_suffix(panel_ok),
