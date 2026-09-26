@@ -345,6 +345,12 @@ class TrainPassengerView(discord.ui.View):
                 ),
                 view=None,
             )
+        except Exception:
+            logger.exception("좌석도 하차 버튼 오류")
+            await interaction.edit_original_response(
+                content="하차 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
 
 
 class TrainBoardSelect(discord.ui.Select):
@@ -418,6 +424,12 @@ class TrainBoardSelect(discord.ui.Select):
                 content=await self.controller.error_text(
                     interaction.guild, error, interaction.user.id
                 ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("좌석도 탑승 선택 오류")
+            await interaction.edit_original_response(
+                content="열차 탑승 처리 중 오류가 발생했습니다.",
                 view=None,
             )
 
@@ -495,6 +507,12 @@ class TrainPanelView(discord.ui.View):
                 await self.controller.error_text(
                     interaction.guild, error, interaction.user.id
                 ),
+                ephemeral=True,
+            )
+        except Exception:
+            logger.exception("좌석도 새 열차 만들기 오류")
+            await interaction.followup.send(
+                "열차 생성 처리 중 오류가 발생했습니다.",
                 ephemeral=True,
             )
 
@@ -604,6 +622,12 @@ class TrainPanelView(discord.ui.View):
                 await self.controller.error_text(
                     interaction.guild, error, interaction.user.id
                 ),
+                ephemeral=True,
+            )
+        except Exception:
+            logger.exception("좌석도 내 열차 하차 오류")
+            await interaction.followup.send(
+                "하차 처리 중 오류가 발생했습니다.",
                 ephemeral=True,
             )
 
