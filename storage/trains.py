@@ -58,6 +58,13 @@ class TrainRepository:
                 state["passenger_ids"].append(int(user_id))
         return result
 
+    def next_available_car(self, guild_id):
+        active = set(self.snapshot(guild_id))
+        car_no = 1
+        while car_no in active:
+            car_no += 1
+        return car_no
+
     def find_user(self, guild_id, user_id):
         with self.db.connect() as conn:
             row = conn.execute(
