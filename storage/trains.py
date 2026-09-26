@@ -121,6 +121,56 @@ class TrainRepository:
                     (int(guild_id), car_no, int(user_id)),
                 )
 
+    def set_composition(self, guild_id, car_no, conductor_id, passenger_ids=()):
+        """관리자가 실제 운행 중인 파티 구성을 좌석도에 그대로 맞춥니다."""
+        car_no = self._check_car(car_no)
+        guild_id = int(guild_id)
+        participants = [int(conductor_id), *(int(value) for value in passenger_ids)]
+
+        if len(participants) > TRAIN_CAPACITY:
+            raise TrainStateError("full", car_no=car_no)
+        if len(set(participants)) != len(participants):
+            raise TrainStateError("duplicate_participants", car_no=car_no)
+
+        with self.db.connect() as conn:
+            # 같은 호차의 기존 구성은 통째로 교체할 수 있지만, 다른 호차에
+            # 이미 등록된 사람까지 조용히 빼앗지는 않는다.
+            for user_id in participants:
+                row = conn.execute(
+                    """
+                    SELECT car_no
+                    FROM train_members
+                    WHERE guild_id = ? AND user_id = ? AND car_no != ?
+                    """,
+                    (guild_id, user_id, car_no),
+                ).fetchone()
+                if row is not None:
+                    raise TrainStateError(
+                        "already_boarded",
+                        user_id=user_id,
+                        existing_car=int(row[0]),
+                    )
+
+            conn.execute(
+                "DELETE FROM train_members WHERE guild_id = ? AND car_no = ?",
+                (guild_id, car_no),
+            )
+            conn.execute(
+                """
+                INSERT INTO train_members (guild_id, car_no, user_id, role)
+                VALUES (?, ?, ?, 'conductor')
+                """,
+                (guild_id, car_no, int(conductor_id)),
+            )
+            for user_id in passenger_ids:
+                conn.execute(
+                    """
+                    INSERT INTO train_members (guild_id, car_no, user_id, role)
+                    VALUES (?, ?, ?, 'passenger')
+                    """,
+                    (guild_id, car_no, int(user_id)),
+                )
+
     def board(self, guild_id, car_no, user_id):
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
@@ -172,7 +222,7 @@ class TrainRepository:
                 (guild_id, car_no, user_id),
             )
 
-    def add_passenger(self, guild_id, car_no, requester_id, user_id):
+    def add_passenger(self, guild_id, car_no, requester_id, user_id, *, force=False):
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
         requester_id = int(requester_id)
@@ -189,7 +239,7 @@ class TrainRepository:
             ).fetchone()
             if conductor is None:
                 raise TrainStateError("car_inactive", car_no=car_no)
-            if int(conductor[0]) != requester_id:
+            if not force and int(conductor[0]) != requester_id:
                 raise TrainStateError("not_conductor", car_no=car_no)
 
             existing = conn.execute(
@@ -226,7 +276,7 @@ class TrainRepository:
                 (guild_id, car_no, user_id),
             )
 
-    def remove_passenger(self, guild_id, car_no, requester_id, user_id):
+    def remove_passenger(self, guild_id, car_no, requester_id, user_id, *, force=False):
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
         requester_id = int(requester_id)
@@ -243,7 +293,7 @@ class TrainRepository:
             ).fetchone()
             if conductor is None:
                 raise TrainStateError("car_inactive", car_no=car_no)
-            if int(conductor[0]) != requester_id:
+            if not force and int(conductor[0]) != requester_id:
                 raise TrainStateError("not_conductor", car_no=car_no)
 
             target = conn.execute(
