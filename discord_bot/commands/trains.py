@@ -223,6 +223,9 @@ class TrainController:
             return f"{name}님은 이미 {error.existing_car}호차에 탑승 중입니다."
         if error.code == "not_boarded":
             return "현재 탑승 중인 열차가 없습니다."
+        if error.code == "not_passenger":
+            name = await self.display_name(guild, error.user_id)
+            return f"{name}님은 {error.car_no}호차 승객이 아닙니다."
         if error.code == "conductor_cannot_leave":
             return "기장은 /열차종료를 이용해 주세요."
         if error.code == "not_conductor":
@@ -365,6 +368,104 @@ def register(bot):
             logger.exception("/열차하차 오류")
             await interaction.followup.send(
                 "열차 하차 처리 중 오류가 발생했습니다.", ephemeral=True
+            )
+
+    @bot.tree.command(
+        name="열차승객추가",
+        description="기장이 자신의 열차에 승객을 추가합니다.",
+    )
+    @app_commands.describe(
+        호차="승객을 추가할 열차",
+        승객="추가할 승객",
+    )
+    @app_commands.choices(호차=CAR_CHOICES)
+    async def train_add_passenger(
+        interaction: discord.Interaction,
+        호차: app_commands.Choice[int],
+        승객: discord.Member,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 명령어는 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with controller.lock_for(interaction.guild.id):
+                controller.repository.add_passenger(
+                    interaction.guild.id,
+                    호차.value,
+                    interaction.user.id,
+                    승객.id,
+                )
+            panel_ok = await controller.ensure_panel(interaction.guild)
+            await interaction.followup.send(
+                f"➕ {호차.value}호차에 {discord.utils.escape_markdown(승객.display_name)}님을 추가했습니다."
+                + controller.panel_suffix(panel_ok),
+                ephemeral=True,
+                allowed_mentions=NO_MENTIONS,
+            )
+        except TrainStateError as error:
+            await interaction.followup.send(
+                await controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                ephemeral=True,
+                allowed_mentions=NO_MENTIONS,
+            )
+        except Exception:
+            logger.exception("/열차승객추가 오류")
+            await interaction.followup.send(
+                "승객 추가 처리 중 오류가 발생했습니다.", ephemeral=True
+            )
+
+    @bot.tree.command(
+        name="열차승객하차",
+        description="기장이 자신의 열차에서 승객을 하차시킵니다.",
+    )
+    @app_commands.describe(
+        호차="승객을 하차시킬 열차",
+        승객="하차시킬 승객",
+    )
+    @app_commands.choices(호차=CAR_CHOICES)
+    async def train_remove_passenger(
+        interaction: discord.Interaction,
+        호차: app_commands.Choice[int],
+        승객: discord.Member,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 명령어는 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with controller.lock_for(interaction.guild.id):
+                controller.repository.remove_passenger(
+                    interaction.guild.id,
+                    호차.value,
+                    interaction.user.id,
+                    승객.id,
+                )
+            panel_ok = await controller.ensure_panel(interaction.guild)
+            await interaction.followup.send(
+                f"➖ {호차.value}호차에서 {discord.utils.escape_markdown(승객.display_name)}님을 하차시켰습니다."
+                + controller.panel_suffix(panel_ok),
+                ephemeral=True,
+                allowed_mentions=NO_MENTIONS,
+            )
+        except TrainStateError as error:
+            await interaction.followup.send(
+                await controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                ephemeral=True,
+                allowed_mentions=NO_MENTIONS,
+            )
+        except Exception:
+            logger.exception("/열차승객하차 오류")
+            await interaction.followup.send(
+                "승객 하차 처리 중 오류가 발생했습니다.", ephemeral=True
             )
 
     @bot.tree.command(
