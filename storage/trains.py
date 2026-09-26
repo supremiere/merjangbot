@@ -172,6 +172,103 @@ class TrainRepository:
                 (guild_id, car_no, user_id),
             )
 
+    def add_passenger(self, guild_id, car_no, requester_id, user_id):
+        car_no = self._check_car(car_no)
+        guild_id = int(guild_id)
+        requester_id = int(requester_id)
+        user_id = int(user_id)
+
+        with self.db.connect() as conn:
+            conductor = conn.execute(
+                """
+                SELECT user_id
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND role = 'conductor'
+                """,
+                (guild_id, car_no),
+            ).fetchone()
+            if conductor is None:
+                raise TrainStateError("car_inactive", car_no=car_no)
+            if int(conductor[0]) != requester_id:
+                raise TrainStateError("not_conductor", car_no=car_no)
+
+            existing = conn.execute(
+                """
+                SELECT car_no
+                FROM train_members
+                WHERE guild_id = ? AND user_id = ?
+                """,
+                (guild_id, user_id),
+            ).fetchone()
+            if existing is not None:
+                raise TrainStateError(
+                    "already_boarded",
+                    user_id=user_id,
+                    existing_car=int(existing[0]),
+                )
+
+            count = conn.execute(
+                """
+                SELECT COUNT(*)
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ?
+                """,
+                (guild_id, car_no),
+            ).fetchone()[0]
+            if int(count) >= TRAIN_CAPACITY:
+                raise TrainStateError("full", car_no=car_no)
+
+            conn.execute(
+                """
+                INSERT INTO train_members (guild_id, car_no, user_id, role)
+                VALUES (?, ?, ?, 'passenger')
+                """,
+                (guild_id, car_no, user_id),
+            )
+
+    def remove_passenger(self, guild_id, car_no, requester_id, user_id):
+        car_no = self._check_car(car_no)
+        guild_id = int(guild_id)
+        requester_id = int(requester_id)
+        user_id = int(user_id)
+
+        with self.db.connect() as conn:
+            conductor = conn.execute(
+                """
+                SELECT user_id
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND role = 'conductor'
+                """,
+                (guild_id, car_no),
+            ).fetchone()
+            if conductor is None:
+                raise TrainStateError("car_inactive", car_no=car_no)
+            if int(conductor[0]) != requester_id:
+                raise TrainStateError("not_conductor", car_no=car_no)
+
+            target = conn.execute(
+                """
+                SELECT role
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND user_id = ?
+                """,
+                (guild_id, car_no, user_id),
+            ).fetchone()
+            if target is None or str(target[0]) != "passenger":
+                raise TrainStateError(
+                    "not_passenger",
+                    car_no=car_no,
+                    user_id=user_id,
+                )
+
+            conn.execute(
+                """
+                DELETE FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND user_id = ? AND role = 'passenger'
+                """,
+                (guild_id, car_no, user_id),
+            )
+
     def leave(self, guild_id, user_id):
         guild_id = int(guild_id)
         user_id = int(user_id)
