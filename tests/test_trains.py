@@ -6,6 +6,36 @@ from storage.database import Database
 from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
 
 
+def test_legacy_three_car_schema_migrates_to_dynamic_numbers(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE train_members (
+                guild_id INTEGER NOT NULL,
+                car_no INTEGER NOT NULL CHECK (car_no BETWEEN 1 AND 3),
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
+                PRIMARY KEY (guild_id, user_id)
+            );
+            INSERT INTO train_members (guild_id, car_no, user_id, role)
+            VALUES (10, 1, 100, 'conductor');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database = Database(path)
+    database.initialize()
+    migrated = TrainRepository(database)
+
+    assert migrated.snapshot(10)[1]["conductor_id"] == 100
+    migrated.start(10, 4, 400)
+    assert migrated.snapshot(10)[4]["conductor_id"] == 400
+
+
 @pytest.fixture()
 def repository(tmp_path):
     database = Database(tmp_path / "test.db")
