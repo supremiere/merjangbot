@@ -155,6 +155,44 @@ def test_conductor_cannot_remove_member_from_another_train(repository):
     assert repository.find_user(10, 201).car_no == 2
 
 
+def test_admin_can_replace_train_composition(repository):
+    repository.start(10, 1, 100, [101])
+
+    repository.set_composition(10, 1, 200, [201, 202])
+
+    state = repository.snapshot(10)[1]
+    assert state["conductor_id"] == 200
+    assert state["passenger_ids"] == [201, 202]
+    assert repository.find_user(10, 100) is None
+    assert repository.find_user(10, 101) is None
+
+
+def test_admin_composition_rejects_member_in_other_train(repository):
+    repository.start(10, 1, 100)
+    repository.start(10, 2, 200, [201])
+
+    error = assert_error(
+        "already_boarded",
+        repository.set_composition,
+        10,
+        1,
+        300,
+        [201],
+    )
+    assert error.existing_car == 2
+    assert repository.snapshot(10)[1]["conductor_id"] == 100
+
+
+def test_admin_force_add_and_remove_bypass_conductor_check(repository):
+    repository.start(10, 1, 100, [101])
+
+    repository.add_passenger(10, 1, 999, 102, force=True)
+    assert repository.find_user(10, 102).role == "passenger"
+
+    repository.remove_passenger(10, 1, 999, 101, force=True)
+    assert repository.find_user(10, 101) is None
+
+
 def test_panel_location_persists(repository):
     repository.save_panel_location(10, 1234, 5678)
     assert repository.panel_location(10) == (1234, 5678)
