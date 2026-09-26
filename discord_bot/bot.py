@@ -5,7 +5,7 @@ import logging
 import discord
 from discord import app_commands
 
-from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot
+from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot, trains
 from discord_bot.jobs.abyss import AbyssJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
 from discord_bot.jobs.notices import NoticeJobs
@@ -55,9 +55,9 @@ class MerjangBot(discord.Client):
         self._sync_lock = asyncio.Lock()
         # 모비라이프 내부/프록시 API 없이 서버상태와 어비스 핵심 기능을 독립 운영합니다.
         # 유지: /시세(OpenAPI), /룬통계, /청소, /오픈알림, 서버상태,
-        #       /어비스, /어구알림, /어구제보, /머장봇테스트, 공식 공지 감시
+        #       /어비스, /어구알림, /어구제보, /머장봇테스트, /열차*, 공식 공지 감시
         # 중단: /악보, /어비스랭킹
-        for module in (market, cleanup, rune_stats, server_status, abyss, test_bot):
+        for module in (market, cleanup, rune_stats, server_status, abyss, test_bot, trains):
             module.register(self)
         self.jobs = [
             NoticeJobs(self),
@@ -101,12 +101,20 @@ class MerjangBot(discord.Client):
             await self.sync_commands()
         except Exception:
             logger.exception("명령어 동기화 오류")
+        try:
+            await self.train_controller.ensure_all_panels()
+        except Exception:
+            logger.exception("우만열차 현황판 초기화 오류")
 
     async def on_guild_join(self, guild):
         try:
             await self.sync_commands()
         except Exception:
             logger.exception("새 서버 명령어 등록 오류")
+        try:
+            await self.train_controller.ensure_panel(guild)
+        except Exception:
+            logger.exception("새 서버 우만열차 현황판 초기화 오류")
 
     async def close(self):
         pending = []

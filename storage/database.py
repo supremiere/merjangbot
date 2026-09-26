@@ -62,4 +62,31 @@ class Database:
                     maintenance_start TEXT PRIMARY KEY,
                     sent_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS train_members (
+                    guild_id INTEGER NOT NULL,
+                    car_no INTEGER NOT NULL CHECK (car_no BETWEEN 1 AND 3),
+                    user_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
+                    PRIMARY KEY (guild_id, user_id)
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_train_one_conductor
+                    ON train_members (guild_id, car_no)
+                    WHERE role = 'conductor';
+                CREATE TRIGGER IF NOT EXISTS trg_train_capacity
+                BEFORE INSERT ON train_members
+                WHEN (
+                    SELECT COUNT(*)
+                    FROM train_members
+                    WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no
+                ) >= 3
+                BEGIN
+                    SELECT RAISE(ABORT, 'train_full');
+                END;
+
+                CREATE TABLE IF NOT EXISTS train_panels (
+                    guild_id INTEGER PRIMARY KEY,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL
+                );
             """)
