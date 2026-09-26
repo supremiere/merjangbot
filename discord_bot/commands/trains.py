@@ -668,7 +668,6 @@ def register(bot):
     controller = TrainController(bot)
     controller.panel_view = TrainPanelView(controller)
     bot.train_controller = controller
-    bot.add_view(controller.panel_view)
 
     @bot.tree.command(
         name="열차구성",
