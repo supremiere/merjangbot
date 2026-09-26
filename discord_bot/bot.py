@@ -69,6 +69,7 @@ class MerjangBot(discord.Client):
 
     async def setup_hook(self):
         self.database.initialize()
+        self.add_view(self.train_controller.panel_view)
         self.abyss.repository.seed_initial_observation()
         await self.abyss.refresh()
         self.rune_stats.load_cache()
