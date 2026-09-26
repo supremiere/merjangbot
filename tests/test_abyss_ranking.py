@@ -190,16 +190,15 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(self.service.request_refresh())
         self.service.refresh.assert_awaited_once()
 
-    async def test_new_command_registered_without_login(self):
+    async def test_current_commands_registered_without_login(self):
         settings = Settings(token="test", notice_channel_id=1, abyss_channel_id=2,
                             server_status_channel_id=3, db_file=Path(self.temp.name) / "bot.db")
         bot = create_bot(settings)
         try:
             names = {c.name for c in bot.tree.get_commands()}
-            self.assertTrue({"어비스랭킹", "룬통계", "어비스", "어구알림", "시세", "악보", "청소"} <= names)
-            command = bot.tree.get_command("어비스랭킹")
-            self.assertEqual([p.name for p in command.parameters], ["닉네임", "서버"])
-            self.assertFalse(command.parameters[1].required)
+            self.assertTrue({"룬통계", "어비스", "어구알림", "시세", "청소", "열차출발", "열차승차", "열차하차"} <= names)
+            self.assertNotIn("어비스랭킹", names)
+            self.assertNotIn("악보", names)
         finally:
             await bot.close()
 
@@ -228,21 +227,12 @@ class RefreshTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("75,025", embed.description)
         self.assertIn("갱신 지연", [f.name for f in embed.fields])
 
-    async def test_command_uses_korean_server_filter_without_network(self):
+    async def test_discontinued_abyss_ranking_command_stays_unregistered(self):
         settings = Settings(token="test", notice_channel_id=1, abyss_channel_id=2,
                             server_status_channel_id=3, db_file=Path(self.temp.name) / "bot.db")
         bot = create_bot(settings)
-        bot.abyss_ranking.cache = snapshot([entry(), entry(server="02")])
-        bot.abyss_ranking.ensure_cache = AsyncMock(return_value=bot.abyss_ranking.cache)
-        interaction = SimpleNamespace(response=AsyncMock(), followup=AsyncMock(),
-                                      user=SimpleNamespace(id=1))
         try:
-            command = bot.tree.get_command("어비스랭킹")
-            await command.callback(interaction, "Roxxy", "데이안")
-            embed = interaction.followup.send.call_args.kwargs["embed"]
-            self.assertEqual(embed.title, "🏆 데이안 암흑술사 · 31위")
-            interaction.response.defer.assert_awaited_once()
-            interaction.followup.send.assert_awaited_once()
+            self.assertIsNone(bot.tree.get_command("어비스랭킹"))
         finally:
             await bot.close()
 
