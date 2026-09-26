@@ -6,6 +6,36 @@ from storage.database import Database
 from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
 
 
+def test_legacy_three_car_schema_migrates_to_dynamic_numbers(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    try:
+        conn.executescript(
+            """
+            CREATE TABLE train_members (
+                guild_id INTEGER NOT NULL,
+                car_no INTEGER NOT NULL CHECK (car_no BETWEEN 1 AND 3),
+                user_id INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
+                PRIMARY KEY (guild_id, user_id)
+            );
+            INSERT INTO train_members (guild_id, car_no, user_id, role)
+            VALUES (10, 1, 100, 'conductor');
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    database = Database(path)
+    database.initialize()
+    migrated = TrainRepository(database)
+
+    assert migrated.snapshot(10)[1]["conductor_id"] == 100
+    migrated.start(10, 4, 400)
+    assert migrated.snapshot(10)[4]["conductor_id"] == 400
+
+
 @pytest.fixture()
 def repository(tmp_path):
     database = Database(tmp_path / "test.db")
@@ -26,7 +56,7 @@ def test_start_and_snapshot(repository):
 
     assert state[1]["conductor_id"] == 100
     assert state[1]["passenger_ids"] == [101]
-    assert state[2]["conductor_id"] is None
+    assert 2 not in state
     assert repository.find_user(10, 100).role == "conductor"
     assert repository.find_user(10, 101).role == "passenger"
 
@@ -75,9 +105,7 @@ def test_only_conductor_can_end_train(repository):
     assert_error("not_conductor", repository.end, 10, 1, 101)
     repository.end(10, 1, 100)
 
-    state = repository.snapshot(10)[1]
-    assert state["conductor_id"] is None
-    assert state["passenger_ids"] == []
+    assert 1 not in repository.snapshot(10)
 
 
 def test_force_end_clears_train(repository):
@@ -85,9 +113,7 @@ def test_force_end_clears_train(repository):
 
     repository.end(10, 1, force=True)
 
-    state = repository.snapshot(10)[1]
-    assert state["conductor_id"] is None
-    assert state["passenger_ids"] == []
+    assert 1 not in repository.snapshot(10)
 
 
 def test_conductor_can_add_passenger(repository):
@@ -191,6 +217,31 @@ def test_admin_force_add_and_remove_bypass_conductor_check(repository):
 
     repository.remove_passenger(10, 1, 999, 101, force=True)
     assert repository.find_user(10, 101) is None
+
+
+def test_dynamic_train_numbers_are_supported(repository):
+    repository.start(10, 4, 400, [401])
+    repository.start(10, 27, 2700)
+
+    snapshot = repository.snapshot(10)
+    assert snapshot[4]["conductor_id"] == 400
+    assert snapshot[4]["passenger_ids"] == [401]
+    assert snapshot[27]["conductor_id"] == 2700
+
+
+def test_invalid_non_positive_train_number_is_rejected(repository):
+    assert_error("invalid_car", repository.start, 10, 0, 100)
+    assert_error("invalid_car", repository.start, 10, -1, 100)
+
+
+def test_snapshot_only_contains_active_trains(repository):
+    assert repository.snapshot(10) == {}
+
+    repository.start(10, 8, 800)
+    assert list(repository.snapshot(10)) == [8]
+
+    repository.end(10, 8, 800)
+    assert repository.snapshot(10) == {}
 
 
 def test_panel_location_persists(repository):

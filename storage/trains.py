@@ -2,7 +2,6 @@
 from dataclasses import dataclass
 
 
-TRAIN_CARS = (1, 2, 3)
 TRAIN_CAPACITY = 3
 
 
@@ -29,15 +28,12 @@ class TrainRepository:
     @staticmethod
     def _check_car(car_no):
         car_no = int(car_no)
-        if car_no not in TRAIN_CARS:
+        if car_no <= 0:
             raise TrainStateError("invalid_car", car_no=car_no)
         return car_no
 
     def snapshot(self, guild_id):
-        result = {
-            car_no: {"conductor_id": None, "passenger_ids": []}
-            for car_no in TRAIN_CARS
-        }
+        result = {}
         with self.db.connect() as conn:
             rows = conn.execute(
                 """
@@ -51,12 +47,15 @@ class TrainRepository:
                 (int(guild_id),),
             ).fetchall()
         for car_no, user_id, role in rows:
-            if car_no not in result:
-                continue
+            car_no = int(car_no)
+            state = result.setdefault(
+                car_no,
+                {"conductor_id": None, "passenger_ids": []},
+            )
             if role == "conductor":
-                result[car_no]["conductor_id"] = int(user_id)
+                state["conductor_id"] = int(user_id)
             else:
-                result[car_no]["passenger_ids"].append(int(user_id))
+                state["passenger_ids"].append(int(user_id))
         return result
 
     def find_user(self, guild_id, user_id):

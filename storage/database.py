@@ -17,6 +17,79 @@ class Database:
         finally:
             conn.close()
 
+    def _initialize_train_tables(self, conn):
+        row = conn.execute(
+            """
+            SELECT sql
+            FROM sqlite_master
+            WHERE type = 'table' AND name = 'train_members'
+            """
+        ).fetchone()
+        schema_sql = (row[0] or "") if row else ""
+
+        # 초기 구현은 1~3호차만 허용했다. 기존 운영 DB도 그대로 업그레이드해
+        # 4호차 이상을 사용할 수 있도록 테이블을 한 번 마이그레이션한다.
+        if row and "BETWEEN 1 AND 3" in schema_sql.upper():
+            conn.executescript(
+                """
+                DROP TRIGGER IF EXISTS trg_train_capacity;
+                DROP INDEX IF EXISTS ux_train_one_conductor;
+
+                ALTER TABLE train_members RENAME TO train_members_legacy;
+
+                CREATE TABLE train_members (
+                    guild_id INTEGER NOT NULL,
+                    car_no INTEGER NOT NULL CHECK (car_no > 0),
+                    user_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
+                    PRIMARY KEY (guild_id, user_id)
+                );
+
+                INSERT INTO train_members (guild_id, car_no, user_id, role)
+                SELECT guild_id, car_no, user_id, role
+                FROM train_members_legacy;
+
+                DROP TABLE train_members_legacy;
+                """
+            )
+        elif row is None:
+            conn.execute(
+                """
+                CREATE TABLE train_members (
+                    guild_id INTEGER NOT NULL,
+                    car_no INTEGER NOT NULL CHECK (car_no > 0),
+                    user_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
+                    PRIMARY KEY (guild_id, user_id)
+                )
+                """
+            )
+
+        conn.executescript(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_train_one_conductor
+                ON train_members (guild_id, car_no)
+                WHERE role = 'conductor';
+
+            CREATE TRIGGER IF NOT EXISTS trg_train_capacity
+            BEFORE INSERT ON train_members
+            WHEN (
+                SELECT COUNT(*)
+                FROM train_members
+                WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no
+            ) >= 3
+            BEGIN
+                SELECT RAISE(ABORT, 'train_full');
+            END;
+
+            CREATE TABLE IF NOT EXISTS train_panels (
+                guild_id INTEGER PRIMARY KEY,
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL
+            );
+            """
+        )
+
     def initialize(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
@@ -62,31 +135,5 @@ class Database:
                     maintenance_start TEXT PRIMARY KEY,
                     sent_at TEXT NOT NULL
                 );
-
-                CREATE TABLE IF NOT EXISTS train_members (
-                    guild_id INTEGER NOT NULL,
-                    car_no INTEGER NOT NULL CHECK (car_no BETWEEN 1 AND 3),
-                    user_id INTEGER NOT NULL,
-                    role TEXT NOT NULL CHECK (role IN ('conductor', 'passenger')),
-                    PRIMARY KEY (guild_id, user_id)
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS ux_train_one_conductor
-                    ON train_members (guild_id, car_no)
-                    WHERE role = 'conductor';
-                CREATE TRIGGER IF NOT EXISTS trg_train_capacity
-                BEFORE INSERT ON train_members
-                WHEN (
-                    SELECT COUNT(*)
-                    FROM train_members
-                    WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no
-                ) >= 3
-                BEGIN
-                    SELECT RAISE(ABORT, 'train_full');
-                END;
-
-                CREATE TABLE IF NOT EXISTS train_panels (
-                    guild_id INTEGER PRIMARY KEY,
-                    channel_id INTEGER NOT NULL,
-                    message_id INTEGER NOT NULL
-                );
             """)
+            self._initialize_train_tables(conn)

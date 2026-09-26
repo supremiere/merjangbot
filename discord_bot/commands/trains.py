@@ -5,7 +5,7 @@ import logging
 import discord
 from discord import app_commands
 
-from storage.trains import TRAIN_CAPACITY, TRAIN_CARS, TrainRepository, TrainStateError
+from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,6 @@ CHANNEL_NAME = "우만열차좌석도"
 PANEL_TITLE = "🚆 **우만열차 좌석도**"
 TRAIN_ADMIN_ROLES = {"자발적 봉사자", "봉사하는 노예", "머장", "관리자"}
 NO_MENTIONS = discord.AllowedMentions.none()
-CAR_CHOICES = [
-    app_commands.Choice(name=f"{car_no}호", value=car_no)
-    for car_no in TRAIN_CARS
-]
-
 
 def can_manage_trains(member):
     guild = getattr(member, "guild", None)
@@ -87,15 +82,20 @@ class TrainController:
     async def panel_text(self, guild):
         snapshot = self.repository.snapshot(guild.id)
         lines = [PANEL_TITLE, ""]
-        for car_no in TRAIN_CARS:
+
+        active_cars = [
+            car_no
+            for car_no in sorted(snapshot)
+            if snapshot[car_no]["conductor_id"] is not None
+        ]
+        if not active_cars:
+            lines.append("현재 운행 중인 열차가 없습니다.")
+            return "\n".join(lines)
+
+        for car_no in active_cars:
             state = snapshot[car_no]
             conductor_id = state["conductor_id"]
             passengers = state["passenger_ids"]
-            if conductor_id is None:
-                lines.append(f"**{car_no}호차**  ⚪ 운행 대기 · `0/{TRAIN_CAPACITY}`")
-                lines.append("")
-                continue
-
             count = 1 + len(passengers)
             icon = "🔴" if count >= TRAIN_CAPACITY else "🟢"
             status = "만석" if count >= TRAIN_CAPACITY else "운행중"
@@ -105,15 +105,12 @@ class TrainController:
                 for user_id in passengers
             ]
             passenger_text = ", ".join(passenger_names) if passenger_names else "-"
-            empty = TRAIN_CAPACITY - count
-            empty_text = "없음" if empty <= 0 else f"{empty}석"
 
             lines.extend(
                 [
                     f"**{car_no}호차**  {icon} {status} · `{count}/{TRAIN_CAPACITY}`",
                     f"기장 : {conductor_name}",
                     f"승객 : {passenger_text}",
-                    f"빈자리 : {empty_text}",
                     "",
                 ]
             )
@@ -207,7 +204,7 @@ class TrainController:
 
     async def error_text(self, guild, error, requester_id=None):
         if error.code == "invalid_car":
-            return "1호, 2호, 3호차만 사용할 수 있습니다."
+            return "호차 번호는 1 이상의 숫자로 입력해주세요."
         if error.code == "car_active":
             return f"{error.car_no}호차는 이미 운행 중입니다."
         if error.code == "car_inactive":
@@ -246,15 +243,14 @@ def register(bot):
         description="관리자가 실제 운행 중인 열차의 기장과 승객 구성을 직접 맞춥니다.",
     )
     @app_commands.describe(
-        호차="구성할 열차",
+        호차="구성할 열차 번호 (1 이상)",
         기장="해당 열차의 기장",
         승객1="첫 번째 승객 (선택)",
         승객2="두 번째 승객 (선택)",
     )
-    @app_commands.choices(호차=CAR_CHOICES)
     async def train_set_composition(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
         기장: discord.Member,
         승객1: discord.Member | None = None,
         승객2: discord.Member | None = None,
@@ -276,7 +272,7 @@ def register(bot):
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.set_composition(
                     interaction.guild.id,
-                    호차.value,
+                    호차,
                     기장.id,
                     [member.id for member in passengers],
                 )
@@ -287,7 +283,7 @@ def register(bot):
                 for member in passengers
             )
             await interaction.followup.send(
-                f"🛠️ {호차.value}호차 구성을 직접 반영했습니다. "
+                f"🛠️ {호차}호차 구성을 직접 반영했습니다. "
                 f"기장: {names[0]}"
                 + (f" / 승객: {', '.join(names[1:])}" if len(names) > 1 else " / 승객: 없음")
                 + controller.panel_suffix(panel_ok),
@@ -313,14 +309,13 @@ def register(bot):
         description="우만열차를 출발시키고 본인을 기장으로 등록합니다.",
     )
     @app_commands.describe(
-        호차="출발시킬 열차",
+        호차="출발시킬 열차 번호 (1 이상)",
         승객1="같이 출발할 승객 (선택)",
         승객2="같이 출발할 승객 (선택)",
     )
-    @app_commands.choices(호차=CAR_CHOICES)
     async def train_start(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
         승객1: discord.Member | None = None,
         승객2: discord.Member | None = None,
     ):
@@ -336,13 +331,13 @@ def register(bot):
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.start(
                     interaction.guild.id,
-                    호차.value,
+                    호차,
                     interaction.user.id,
                     [member.id for member in passengers],
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             await interaction.followup.send(
-                f"🚆 {호차.value}호차 출발! 기장으로 등록했습니다."
+                f"🚆 {호차}호차 출발! 기장으로 등록했습니다."
                 + controller.panel_suffix(panel_ok),
                 ephemeral=True,
             )
@@ -363,11 +358,10 @@ def register(bot):
         name="열차승차",
         description="운행 중인 우만열차의 빈자리에 탑승합니다.",
     )
-    @app_commands.describe(호차="탑승할 열차")
-    @app_commands.choices(호차=CAR_CHOICES)
+    @app_commands.describe(호차="탑승할 열차 번호 (1 이상)")
     async def train_board(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
     ):
         if interaction.guild is None:
             await interaction.response.send_message(
@@ -379,12 +373,12 @@ def register(bot):
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.board(
                     interaction.guild.id,
-                    호차.value,
+                    호차,
                     interaction.user.id,
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             await interaction.followup.send(
-                f"🎫 {호차.value}호차에 승차했습니다."
+                f"🎫 {호차}호차에 승차했습니다."
                 + controller.panel_suffix(panel_ok),
                 ephemeral=True,
             )
@@ -442,13 +436,12 @@ def register(bot):
         description="기장 또는 관리자가 열차에 승객을 추가합니다.",
     )
     @app_commands.describe(
-        호차="승객을 추가할 열차",
+        호차="승객을 추가할 열차 번호 (1 이상)",
         승객="추가할 승객",
     )
-    @app_commands.choices(호차=CAR_CHOICES)
     async def train_add_passenger(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
         승객: discord.Member,
     ):
         if interaction.guild is None:
@@ -461,7 +454,7 @@ def register(bot):
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.add_passenger(
                     interaction.guild.id,
-                    호차.value,
+                    호차,
                     interaction.user.id,
                     승객.id,
                     force=can_manage_trains(interaction.user)
@@ -470,7 +463,7 @@ def register(bot):
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             await interaction.followup.send(
-                f"➕ {호차.value}호차에 {discord.utils.escape_markdown(승객.display_name)}님을 추가했습니다."
+                f"➕ {호차}호차에 {discord.utils.escape_markdown(승객.display_name)}님을 추가했습니다."
                 + controller.panel_suffix(panel_ok),
                 ephemeral=True,
                 allowed_mentions=NO_MENTIONS,
@@ -494,13 +487,12 @@ def register(bot):
         description="기장 또는 관리자가 열차에서 승객을 하차시킵니다.",
     )
     @app_commands.describe(
-        호차="승객을 하차시킬 열차",
+        호차="승객을 하차시킬 열차 번호 (1 이상)",
         승객="하차시킬 승객",
     )
-    @app_commands.choices(호차=CAR_CHOICES)
     async def train_remove_passenger(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
         승객: discord.Member,
     ):
         if interaction.guild is None:
@@ -513,7 +505,7 @@ def register(bot):
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.remove_passenger(
                     interaction.guild.id,
-                    호차.value,
+                    호차,
                     interaction.user.id,
                     승객.id,
                     force=can_manage_trains(interaction.user)
@@ -522,7 +514,7 @@ def register(bot):
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             await interaction.followup.send(
-                f"➖ {호차.value}호차에서 {discord.utils.escape_markdown(승객.display_name)}님을 하차시켰습니다."
+                f"➖ {호차}호차에서 {discord.utils.escape_markdown(승객.display_name)}님을 하차시켰습니다."
                 + controller.panel_suffix(panel_ok),
                 ephemeral=True,
                 allowed_mentions=NO_MENTIONS,
@@ -545,11 +537,10 @@ def register(bot):
         name="열차종료",
         description="기장 또는 관리자가 우만열차 운행을 종료합니다.",
     )
-    @app_commands.describe(호차="종료할 열차")
-    @app_commands.choices(호차=CAR_CHOICES)
+    @app_commands.describe(호차="종료할 열차 번호 (1 이상)")
     async def train_end(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
     ):
         if interaction.guild is None:
             await interaction.response.send_message(
@@ -562,19 +553,19 @@ def register(bot):
             and can_manage_trains(interaction.user)
         )
         try:
-            state = controller.repository.snapshot(interaction.guild.id)[호차.value]
-            if state["conductor_id"] is None:
-                raise TrainStateError("car_inactive", car_no=호차.value)
+            state = controller.repository.snapshot(interaction.guild.id).get(호차)
+            if state is None or state["conductor_id"] is None:
+                raise TrainStateError("car_inactive", car_no=호차)
             if not manager_override:
                 seat = controller.repository.find_user(
                     interaction.guild.id, interaction.user.id
                 )
                 if (
                     seat is None
-                    or seat.car_no != 호차.value
+                    or seat.car_no != 호차
                     or seat.role != "conductor"
                 ):
-                    raise TrainStateError("not_conductor", car_no=호차.value)
+                    raise TrainStateError("not_conductor", car_no=호차)
         except TrainStateError as error:
             await interaction.response.send_message(
                 await controller.error_text(
@@ -589,13 +580,13 @@ def register(bot):
                 async with controller.lock_for(interaction.guild.id):
                     controller.repository.end(
                         interaction.guild.id,
-                        호차.value,
+                        호차,
                         interaction.user.id,
                         force=manager_override,
                     )
                 panel_ok = await controller.ensure_panel(interaction.guild)
                 return (
-                    f"🛑 {호차.value}호차 운행을 종료했습니다."
+                    f"🛑 {호차}호차 운행을 종료했습니다."
                     + controller.panel_suffix(panel_ok)
                 )
             except TrainStateError as error:
@@ -604,7 +595,7 @@ def register(bot):
                 )
 
         await interaction.response.send_message(
-            f"{호차.value}호차 운행을 종료할까요? 기장과 승객 좌석이 모두 비워집니다.",
+            f"{호차}호차 운행을 종료할까요? 기장과 승객 좌석이 모두 비워집니다.",
             view=ConfirmTrainView(
                 requester_id=interaction.user.id,
                 confirm_label="운행 종료",
@@ -618,11 +609,10 @@ def register(bot):
         name="강제폐차",
         description="관리 권한으로 우만열차 좌석을 강제로 초기화합니다.",
     )
-    @app_commands.describe(호차="강제로 초기화할 열차")
-    @app_commands.choices(호차=CAR_CHOICES)
+    @app_commands.describe(호차="강제로 초기화할 열차 번호 (1 이상)")
     async def train_force_scrap(
         interaction: discord.Interaction,
-        호차: app_commands.Choice[int],
+        호차: int,
     ):
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
@@ -635,10 +625,10 @@ def register(bot):
             )
             return
 
-        state = controller.repository.snapshot(interaction.guild.id)[호차.value]
-        if state["conductor_id"] is None:
+        state = controller.repository.snapshot(interaction.guild.id).get(호차)
+        if state is None or state["conductor_id"] is None:
             await interaction.response.send_message(
-                f"{호차.value}호차는 이미 운행 대기 상태입니다.", ephemeral=True
+                f"{호차}호차는 이미 운행 대기 상태입니다.", ephemeral=True
             )
             return
 
@@ -650,12 +640,12 @@ def register(bot):
                 async with controller.lock_for(interaction.guild.id):
                     controller.repository.end(
                         interaction.guild.id,
-                        호차.value,
+                        호차,
                         force=True,
                     )
                 panel_ok = await controller.ensure_panel(interaction.guild)
                 return (
-                    f"🧹 {호차.value}호차를 강제폐차했습니다."
+                    f"🧹 {호차}호차를 강제폐차했습니다."
                     + controller.panel_suffix(panel_ok)
                 )
             except TrainStateError as error:
@@ -664,7 +654,7 @@ def register(bot):
                 )
 
         await interaction.response.send_message(
-            f"{호차.value}호차를 강제폐차할까요? 현재 좌석 정보가 모두 삭제됩니다.",
+            f"{호차}호차를 강제폐차할까요? 현재 좌석 정보가 모두 삭제됩니다.",
             view=ConfirmTrainView(
                 requester_id=interaction.user.id,
                 confirm_label="강제폐차",
