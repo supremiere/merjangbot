@@ -188,6 +188,38 @@ class TrainController:
             logger.exception("%s 현황판 전송/수정 실패", CHANNEL_NAME)
             return False
 
+        if not message.pinned:
+            me = guild.me
+            permissions = channel.permissions_for(me) if me is not None else None
+            can_pin = bool(
+                permissions is not None
+                and getattr(permissions, "pin_messages", False)
+            )
+            if not can_pin:
+                logger.warning(
+                    "%s 현황판 고정 생략: 봇에게 이 채널의 '메시지 고정(Pin Messages)' 권한이 필요합니다.",
+                    CHANNEL_NAME,
+                )
+            else:
+                try:
+                    await message.pin(reason="우만열차 좌석 현황판")
+                    logger.info("%s 현황판을 고정했습니다.", CHANNEL_NAME)
+                except discord.Forbidden as exc:
+                    logger.warning(
+                        "%s 현황판 고정 실패(Forbidden): status=%s code=%s text=%s",
+                        CHANNEL_NAME,
+                        getattr(exc, "status", None),
+                        getattr(exc, "code", None),
+                        getattr(exc, "text", None),
+                    )
+                except discord.HTTPException as exc:
+                    logger.warning(
+                        "%s 현황판 고정 실패(HTTP): status=%s code=%s text=%s",
+                        CHANNEL_NAME,
+                        getattr(exc, "status", None),
+                        getattr(exc, "code", None),
+                        getattr(exc, "text", None),
+                    )
         return True
 
     async def ensure_all_panels(self):
