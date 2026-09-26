@@ -250,3 +250,17 @@ def test_panel_location_persists(repository):
 
     repository.save_panel_location(10, 9999, 8888)
     assert repository.panel_location(10) == (9999, 8888)
+
+
+def test_next_available_car_uses_smallest_free_number(repository):
+    assert repository.next_available_car(10) == 1
+
+    repository.start(10, 1, 100)
+    repository.start(10, 3, 300)
+    assert repository.next_available_car(10) == 2
+
+    repository.start(10, 2, 200)
+    assert repository.next_available_car(10) == 4
+
+    repository.end(10, 2, 200)
+    assert repository.next_available_car(10) == 2
