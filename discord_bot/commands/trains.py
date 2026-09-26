@@ -65,6 +65,7 @@ class TrainController:
         self.bot = bot
         self.repository = TrainRepository(bot.database)
         self._locks = {}
+        self.panel_view = None
 
     def lock_for(self, guild_id):
         return self._locks.setdefault(int(guild_id), asyncio.Lock())
@@ -82,7 +83,12 @@ class TrainController:
 
     async def panel_text(self, guild):
         snapshot = self.repository.snapshot(guild.id)
-        lines = [PANEL_TITLE, ""]
+        lines = [
+            PANEL_TITLE,
+            "",
+            "아래 버튼으로 열차를 만들고 탑승·하차할 수 있습니다.",
+            "",
+        ]
 
         active_cars = [
             car_no
@@ -177,11 +183,13 @@ class TrainController:
             if message is None:
                 message = await channel.send(
                     content,
+                    view=self.panel_view,
                     allowed_mentions=NO_MENTIONS,
                 )
             else:
                 await message.edit(
                     content=content,
+                    view=self.panel_view,
                     allowed_mentions=NO_MENTIONS,
                 )
             self.repository.save_panel_location(guild.id, channel.id, message.id)
@@ -279,7 +287,7 @@ class TrainController:
             name = await self.display_name(guild, error.user_id)
             return f"{name}님은 {error.car_no}호차 승객이 아닙니다."
         if error.code == "conductor_cannot_leave":
-            return "기장은 /열차종료를 이용해 주세요."
+            return "기장은 좌석도의 '내 열차 종료' 버튼을 이용해 주세요."
         if error.code == "not_conductor":
             return f"이 명령은 {error.car_no}호차 기장만 사용할 수 있습니다."
         return "열차 상태를 처리할 수 없습니다."
@@ -289,8 +297,400 @@ class TrainController:
         return "" if panel_ok else "\n⚠️ 좌석은 저장됐지만 현황판을 갱신하지 못했습니다."
 
 
+
+class TrainPassengerView(discord.ui.View):
+    """탑승 직후 해당 사용자에게만 보여주는 빠른 하차 UI."""
+
+    def __init__(self, controller, requester_id, car_no):
+        super().__init__(timeout=300)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            "이 버튼은 탑승한 본인만 사용할 수 있습니다.",
+            ephemeral=True,
+        )
+        return False
+
+    @discord.ui.button(label="🚪 하차하기", style=discord.ButtonStyle.secondary)
+    async def leave(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                car_no = self.controller.repository.leave(
+                    interaction.guild.id,
+                    interaction.user.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            await interaction.edit_original_response(
+                content=(
+                    f"👋 {car_no}호차에서 하차했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=None,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("좌석도 하차 버튼 오류")
+            await interaction.edit_original_response(
+                content="하차 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainBoardSelect(discord.ui.Select):
+    def __init__(self, controller, requester_id, snapshot):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+
+        options = []
+        for car_no in sorted(snapshot):
+            state = snapshot[car_no]
+            if state["conductor_id"] is None:
+                continue
+            count = 1 + len(state["passenger_ids"])
+            if count >= TRAIN_CAPACITY:
+                continue
+            options.append(
+                discord.SelectOption(
+                    label=f"{car_no}호차",
+                    description=f"현재 {count}/{TRAIN_CAPACITY}명 탑승",
+                    value=str(car_no),
+                    emoji="🚆",
+                )
+            )
+            if len(options) >= 25:
+                break
+
+        super().__init__(
+            placeholder="탑승할 열차를 선택하세요",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="train:panel:board-select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 탑승 메뉴는 요청한 본인만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        car_no = int(self.values[0])
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.board(
+                    interaction.guild.id,
+                    car_no,
+                    interaction.user.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            await interaction.edit_original_response(
+                content=(
+                    f"🎫 {car_no}호차에 탑승했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=TrainPassengerView(
+                    self.controller,
+                    interaction.user.id,
+                    car_no,
+                ),
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("좌석도 탑승 선택 오류")
+            await interaction.edit_original_response(
+                content="열차 탑승 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainBoardPickerView(discord.ui.View):
+    def __init__(self, controller, requester_id, snapshot):
+        super().__init__(timeout=120)
+        self.requester_id = int(requester_id)
+        self.add_item(TrainBoardSelect(controller, requester_id, snapshot))
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id == self.requester_id:
+            return True
+        await interaction.response.send_message(
+            "이 탑승 메뉴는 요청한 본인만 사용할 수 있습니다.",
+            ephemeral=True,
+        )
+        return False
+
+
+class TrainPanelView(discord.ui.View):
+    """좌석도 메시지에 항상 붙어 있는 사용자용 열차 UI."""
+
+    def __init__(self, controller):
+        super().__init__(timeout=None)
+        self.controller = controller
+
+    @discord.ui.button(
+        label="새 열차 만들기",
+        emoji="🚆",
+        style=discord.ButtonStyle.primary,
+        custom_id="train:panel:create",
+    )
+    async def create_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                existing = self.controller.repository.find_user(
+                    interaction.guild.id, interaction.user.id
+                )
+                if existing is not None:
+                    raise TrainStateError(
+                        "already_boarded",
+                        user_id=interaction.user.id,
+                        existing_car=existing.car_no,
+                    )
+                car_no = self.controller.repository.next_available_car(
+                    interaction.guild.id
+                )
+                self.controller.repository.start(
+                    interaction.guild.id,
+                    car_no,
+                    interaction.user.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            await self.controller.announce_train_arrival(interaction.guild, car_no)
+            await interaction.followup.send(
+                (
+                    f"🚆 {car_no}호차를 만들었습니다. 기장으로 등록했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                ephemeral=True,
+            )
+        except TrainStateError as error:
+            await interaction.followup.send(
+                await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                ephemeral=True,
+            )
+        except Exception:
+            logger.exception("좌석도 새 열차 만들기 오류")
+            await interaction.followup.send(
+                "열차 생성 처리 중 오류가 발생했습니다.",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="열차 탑승",
+        emoji="🎫",
+        style=discord.ButtonStyle.success,
+        custom_id="train:panel:board",
+    )
+    async def board_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        existing = self.controller.repository.find_user(
+            interaction.guild.id, interaction.user.id
+        )
+        if existing is not None:
+            if existing.role == "passenger":
+                await interaction.response.send_message(
+                    f"이미 {existing.car_no}호차에 탑승 중입니다.",
+                    view=TrainPassengerView(
+                        self.controller,
+                        interaction.user.id,
+                        existing.car_no,
+                    ),
+                    ephemeral=True,
+                )
+            else:
+                await interaction.response.send_message(
+                    (
+                        f"현재 {existing.car_no}호차 기장입니다. "
+                        "운행을 끝내려면 '내 열차 종료' 버튼을 이용해 주세요."
+                    ),
+                    ephemeral=True,
+                )
+            return
+
+        snapshot = self.controller.repository.snapshot(interaction.guild.id)
+        available = {
+            car_no: state
+            for car_no, state in snapshot.items()
+            if state["conductor_id"] is not None
+            and 1 + len(state["passenger_ids"]) < TRAIN_CAPACITY
+        }
+        if not available:
+            await interaction.response.send_message(
+                "현재 탑승 가능한 열차가 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        extra = (
+            "\n운행 중인 열차가 많아 앞의 25개만 표시합니다."
+            if len(available) > 25
+            else ""
+        )
+        await interaction.response.send_message(
+            "탑승할 열차를 선택하세요." + extra,
+            view=TrainBoardPickerView(
+                self.controller,
+                interaction.user.id,
+                available,
+            ),
+            ephemeral=True,
+        )
+
+    @discord.ui.button(
+        label="내 열차 하차",
+        emoji="🚪",
+        style=discord.ButtonStyle.secondary,
+        custom_id="train:panel:leave",
+    )
+    async def leave_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                car_no = self.controller.repository.leave(
+                    interaction.guild.id,
+                    interaction.user.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            await interaction.followup.send(
+                (
+                    f"👋 {car_no}호차에서 하차했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                ephemeral=True,
+            )
+        except TrainStateError as error:
+            await interaction.followup.send(
+                await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                ephemeral=True,
+            )
+        except Exception:
+            logger.exception("좌석도 내 열차 하차 오류")
+            await interaction.followup.send(
+                "하차 처리 중 오류가 발생했습니다.",
+                ephemeral=True,
+            )
+
+    @discord.ui.button(
+        label="내 열차 종료",
+        emoji="🛑",
+        style=discord.ButtonStyle.danger,
+        custom_id="train:panel:end",
+    )
+    async def end_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
+            )
+            return
+
+        seat = self.controller.repository.find_user(
+            interaction.guild.id, interaction.user.id
+        )
+        if seat is None or seat.role != "conductor":
+            await interaction.response.send_message(
+                "현재 기장으로 운행 중인 열차가 없습니다.",
+                ephemeral=True,
+            )
+            return
+        car_no = seat.car_no
+
+        async def do_end(button_interaction):
+            try:
+                async with self.controller.lock_for(interaction.guild.id):
+                    self.controller.repository.end(
+                        interaction.guild.id,
+                        car_no,
+                        interaction.user.id,
+                    )
+                panel_ok = await self.controller.ensure_panel(interaction.guild)
+                return (
+                    f"🛑 {car_no}호차 운행을 종료했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                )
+            except TrainStateError as error:
+                return await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                )
+
+        await interaction.response.send_message(
+            f"{car_no}호차 운행을 종료할까요? 기장과 승객 좌석이 모두 비워집니다.",
+            view=ConfirmTrainView(
+                requester_id=interaction.user.id,
+                confirm_label="운행 종료",
+                action=do_end,
+            ),
+            ephemeral=True,
+            allowed_mentions=NO_MENTIONS,
+        )
+
 def register(bot):
     controller = TrainController(bot)
+    controller.panel_view = TrainPanelView(controller)
     bot.train_controller = controller
 
     @bot.tree.command(
