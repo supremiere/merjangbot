@@ -188,11 +188,6 @@ class TrainController:
             logger.exception("%s 현황판 전송/수정 실패", CHANNEL_NAME)
             return False
 
-        if not message.pinned:
-            try:
-                await message.pin(reason="우만열차 좌석 현황판")
-            except (discord.Forbidden, discord.HTTPException):
-                logger.warning("%s 현황판을 고정하지 못했습니다.", CHANNEL_NAME)
         return True
 
     async def ensure_all_panels(self):
