@@ -215,6 +215,94 @@ class TrainRepository:
                     (guild_id, car_no, int(user_id)),
                 )
 
+    def set_conductor(self, guild_id, car_no, user_id):
+        """관리자가 운행 중인 열차의 기장을 교체하고 기존 승객은 유지합니다."""
+        car_no = self._check_car(car_no)
+        guild_id = int(guild_id)
+        user_id = int(user_id)
+
+        with self.db.connect() as conn:
+            current = conn.execute(
+                """
+                SELECT user_id
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND role = 'conductor'
+                """,
+                (guild_id, car_no),
+            ).fetchone()
+            if current is None:
+                raise TrainStateError("car_inactive", car_no=car_no)
+
+            other = conn.execute(
+                """
+                SELECT car_no
+                FROM train_members
+                WHERE guild_id = ? AND user_id = ? AND car_no != ?
+                """,
+                (guild_id, user_id, car_no),
+            ).fetchone()
+            if other is not None:
+                raise TrainStateError(
+                    "already_boarded",
+                    user_id=user_id,
+                    existing_car=int(other[0]),
+                )
+
+            current_conductor = int(current[0])
+            if current_conductor == user_id:
+                return
+
+            # 같은 호차 승객을 새 기장으로 지정하는 것도 허용합니다.
+            conn.execute(
+                """
+                DELETE FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND user_id = ? AND role = 'passenger'
+                """,
+                (guild_id, car_no, user_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND user_id = ? AND role = 'conductor'
+                """,
+                (guild_id, car_no, current_conductor),
+            )
+            conn.execute(
+                """
+                INSERT INTO train_members (guild_id, car_no, user_id, role)
+                VALUES (?, ?, ?, 'conductor')
+                """,
+                (guild_id, car_no, user_id),
+            )
+
+    def set_end_time(self, guild_id, car_no, ends_at):
+        """운행 중인 열차의 종료 예정 시각을 변경합니다."""
+        car_no = self._check_car(car_no)
+        guild_id = int(guild_id)
+        ends_at = int(ends_at)
+
+        with self.db.connect() as conn:
+            active = conn.execute(
+                """
+                SELECT 1
+                FROM train_members
+                WHERE guild_id = ? AND car_no = ? AND role = 'conductor'
+                """,
+                (guild_id, car_no),
+            ).fetchone()
+            if active is None:
+                raise TrainStateError("car_inactive", car_no=car_no)
+
+            conn.execute(
+                """
+                INSERT INTO train_schedules (guild_id, car_no, ends_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(guild_id, car_no) DO UPDATE SET
+                    ends_at = excluded.ends_at
+                """,
+                (guild_id, car_no, ends_at),
+            )
+
     def board(self, guild_id, car_no, user_id):
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
