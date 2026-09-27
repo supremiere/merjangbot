@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from discord_bot.commands.trains import (
+    TrainAdminPickerView,
     TrainPanelView,
+    build_admin_picker_view,
     format_train_end_time,
     parse_train_end_time,
 )
@@ -211,3 +213,47 @@ def test_end_time_rejects_invalid_clock_values():
             pass
         else:
             raise AssertionError(f"{value!r} should be rejected")
+
+
+class FakeAdminRepository:
+    def __init__(self, snapshot):
+        self._snapshot = snapshot
+
+    def snapshot(self, guild_id):
+        return self._snapshot
+
+
+class FakeAdminController:
+    def __init__(self, snapshot):
+        self.repository = FakeAdminRepository(snapshot)
+
+
+def test_admin_picker_keeps_create_button_when_no_trains_exist():
+    view = TrainAdminPickerView(
+        FakeAdminController({}),
+        requester_id=100,
+        snapshot={},
+    )
+
+    custom_ids = {
+        getattr(item, "custom_id", None)
+        for item in view.children
+    }
+    assert "train:admin:create" in custom_ids
+    assert "train:admin:car-select" not in custom_ids
+
+
+def test_empty_admin_picker_returns_create_capable_view():
+    guild = SimpleNamespace(id=10)
+    controller = FakeAdminController({})
+
+    content, view = asyncio.run(
+        build_admin_picker_view(controller, guild, requester_id=100)
+    )
+
+    assert "현재 운행 중인 열차가 없습니다." in content
+    assert isinstance(view, TrainAdminPickerView)
+    assert any(
+        getattr(item, "custom_id", None) == "train:admin:create"
+        for item in view.children
+    )
