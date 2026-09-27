@@ -1,9 +1,14 @@
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from discord_bot.commands.trains import TrainPanelView
+from discord_bot.commands.trains import (
+    TrainPanelView,
+    format_train_end_time,
+    parse_train_end_time,
+)
 from storage.trains import TrainStateError
 
 
@@ -164,3 +169,37 @@ def test_public_leave_button_reports_panel_refresh_failure_without_losing_leave(
             "\n⚠️ 좌석은 저장됐지만 현황판을 갱신하지 못했습니다."
         )
     )
+
+
+def test_end_time_uses_today_when_clock_time_is_still_ahead():
+    kst = timezone(timedelta(hours=9))
+    now = datetime(2026, 9, 27, 15, 23, tzinfo=kst)
+
+    ends_at = parse_train_end_time("23:30", now=now)
+
+    assert datetime.fromtimestamp(ends_at, kst) == datetime(
+        2026, 9, 27, 23, 30, tzinfo=kst
+    )
+    assert format_train_end_time(ends_at, now=now) == "오늘 23:30"
+
+
+def test_end_time_rolls_to_next_day_when_clock_time_has_passed():
+    kst = timezone(timedelta(hours=9))
+    now = datetime(2026, 9, 27, 23, 40, tzinfo=kst)
+
+    ends_at = parse_train_end_time("01:30", now=now)
+
+    assert datetime.fromtimestamp(ends_at, kst) == datetime(
+        2026, 9, 28, 1, 30, tzinfo=kst
+    )
+    assert format_train_end_time(ends_at, now=now) == "내일 01:30"
+
+
+def test_end_time_rejects_invalid_clock_values():
+    for value in ("24:00", "12:60", "abc", "12"):
+        try:
+            parse_train_end_time(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{value!r} should be rejected")

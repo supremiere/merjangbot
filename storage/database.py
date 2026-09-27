@@ -87,6 +87,13 @@ class Database:
                 channel_id INTEGER NOT NULL,
                 message_id INTEGER NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS train_schedules (
+                guild_id INTEGER NOT NULL,
+                car_no INTEGER NOT NULL CHECK (car_no > 0),
+                ends_at INTEGER NOT NULL,
+                PRIMARY KEY (guild_id, car_no)
+            );
             """
         )
 

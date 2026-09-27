@@ -46,11 +46,26 @@ class TrainRepository:
                 """,
                 (int(guild_id),),
             ).fetchall()
+            schedules = {
+                int(car_no): int(ends_at)
+                for car_no, ends_at in conn.execute(
+                    """
+                    SELECT car_no, ends_at
+                    FROM train_schedules
+                    WHERE guild_id = ?
+                    """,
+                    (int(guild_id),),
+                ).fetchall()
+            }
         for car_no, user_id, role in rows:
             car_no = int(car_no)
             state = result.setdefault(
                 car_no,
-                {"conductor_id": None, "passenger_ids": []},
+                {
+                    "conductor_id": None,
+                    "passenger_ids": [],
+                    "ends_at": schedules.get(car_no),
+                },
             )
             if role == "conductor":
                 state["conductor_id"] = int(user_id)
@@ -79,7 +94,15 @@ class TrainRepository:
             return None
         return TrainSeat(car_no=int(row[0]), user_id=int(user_id), role=str(row[1]))
 
-    def start(self, guild_id, car_no, conductor_id, passenger_ids=()):
+    def start(
+        self,
+        guild_id,
+        car_no,
+        conductor_id,
+        passenger_ids=(),
+        *,
+        ends_at=None,
+    ):
         car_no = self._check_car(car_no)
         participants = [int(conductor_id), *(int(value) for value in passenger_ids)]
         if len(participants) > TRAIN_CAPACITY:
@@ -125,6 +148,21 @@ class TrainRepository:
                     VALUES (?, ?, ?, 'passenger')
                     """,
                     (int(guild_id), car_no, int(user_id)),
+                )
+
+            # 같은 호차 번호가 재사용될 때 이전 운행 시간이 남지 않도록
+            # 새 운행 시작 시 스케줄을 항상 초기화합니다.
+            conn.execute(
+                "DELETE FROM train_schedules WHERE guild_id = ? AND car_no = ?",
+                (int(guild_id), car_no),
+            )
+            if ends_at is not None:
+                conn.execute(
+                    """
+                    INSERT INTO train_schedules (guild_id, car_no, ends_at)
+                    VALUES (?, ?, ?)
+                    """,
+                    (int(guild_id), car_no, int(ends_at)),
                 )
 
     def set_composition(self, guild_id, car_no, conductor_id, passenger_ids=()):
@@ -366,6 +404,10 @@ class TrainRepository:
                 raise TrainStateError("not_conductor", car_no=car_no)
             conn.execute(
                 "DELETE FROM train_members WHERE guild_id = ? AND car_no = ?",
+                (guild_id, car_no),
+            )
+            conn.execute(
+                "DELETE FROM train_schedules WHERE guild_id = ? AND car_no = ?",
                 (guild_id, car_no),
             )
 
