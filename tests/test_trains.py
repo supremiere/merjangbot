@@ -264,3 +264,14 @@ def test_next_available_car_uses_smallest_free_number(repository):
 
     repository.end(10, 2, 200)
     assert repository.next_available_car(10) == 2
+
+
+def test_train_end_time_is_saved_in_snapshot_and_cleared_on_end(repository):
+    repository.start(10, 1, 100, ends_at=1_800_000_000)
+
+    assert repository.snapshot(10)[1]["ends_at"] == 1_800_000_000
+
+    repository.end(10, 1, 100)
+    repository.start(10, 1, 200)
+
+    assert repository.snapshot(10)[1]["ends_at"] is None
