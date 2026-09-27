@@ -771,6 +771,531 @@ class TrainPassengerManageView(discord.ui.View):
         return False
 
 
+async def build_admin_picker_view(controller, guild, requester_id):
+    snapshot = controller.repository.snapshot(guild.id)
+    active = {
+        car_no: state
+        for car_no, state in snapshot.items()
+        if state["conductor_id"] is not None
+    }
+    if not active:
+        return (
+            "🛠️ **관리자 모드**\n현재 운행 중인 열차가 없습니다.",
+            None,
+        )
+
+    extra = (
+        "\n운행 중인 열차가 많아 앞의 25개만 표시합니다."
+        if len(active) > 25
+        else ""
+    )
+    return (
+        "🛠️ **관리자 모드**\n편집할 열차를 선택하세요." + extra,
+        TrainAdminPickerView(controller, requester_id, active),
+    )
+
+
+async def build_admin_train_view(controller, guild, requester_id, car_no):
+    state = controller.repository.snapshot(guild.id).get(int(car_no))
+    if state is None or state["conductor_id"] is None:
+        return await build_admin_picker_view(controller, guild, requester_id)
+
+    conductor_name = await controller.display_name(guild, state["conductor_id"])
+    passenger_ids = list(state["passenger_ids"])
+    passenger_names = [
+        await controller.display_name(guild, user_id)
+        for user_id in passenger_ids
+    ]
+    passenger_options = []
+    for user_id, name in zip(passenger_ids, passenger_names):
+        passenger_options.append(
+            discord.SelectOption(
+                label=name[:100],
+                value=str(int(user_id)),
+                description=f"{int(car_no)}호차에서 하차시키기",
+                emoji="🚪",
+            )
+        )
+
+    count = 1 + len(passenger_ids)
+    ends_at = state.get("ends_at")
+    end_text = (
+        f"{format_train_end_time(ends_at)} · <t:{int(ends_at)}:R>"
+        if ends_at is not None
+        else "미설정"
+    )
+    content = (
+        f"🛠️ **관리자 모드 · {int(car_no)}호차**\n"
+        f"👨‍✈️ 기장: {conductor_name}\n"
+        f"💺 승객: {', '.join(passenger_names) if passenger_names else '-'}\n"
+        f"👥 좌석: {count}/{TRAIN_CAPACITY}\n"
+        f"⏰ 종료 예정: {end_text}\n\n"
+        "아래 메뉴에서 기장·승객·운행시간·열차 종료를 직접 편집할 수 있습니다."
+    )
+    return (
+        content,
+        TrainAdminManageView(
+            controller,
+            requester_id,
+            car_no,
+            passenger_options,
+            can_add=count < TRAIN_CAPACITY,
+        ),
+    )
+
+
+class TrainAdminCarSelect(discord.ui.Select):
+    def __init__(self, controller, requester_id, snapshot):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        options = []
+        for car_no in sorted(snapshot):
+            state = snapshot[car_no]
+            count = 1 + len(state["passenger_ids"])
+            options.append(
+                discord.SelectOption(
+                    label=f"{car_no}호차",
+                    value=str(car_no),
+                    description=f"현재 {count}/{TRAIN_CAPACITY}명 탑승",
+                    emoji="🚆",
+                )
+            )
+            if len(options) >= 25:
+                break
+        super().__init__(
+            placeholder="🛠️ 편집할 열차를 선택하세요",
+            min_values=1,
+            max_values=1,
+            options=options,
+            custom_id="train:admin:car-select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        car_no = int(self.values[0])
+        await interaction.response.defer(ephemeral=True)
+        content, view = await build_admin_train_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+            car_no,
+        )
+        await interaction.edit_original_response(content=content, view=view)
+
+
+class TrainAdminPickerView(discord.ui.View):
+    def __init__(self, controller, requester_id, snapshot):
+        super().__init__(timeout=180)
+        self.requester_id = int(requester_id)
+        self.add_item(TrainAdminCarSelect(controller, requester_id, snapshot))
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 관리자 메뉴는 요청한 관리자만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+        if not can_manage_trains(interaction.user):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+
+class TrainAdminConductorSelect(discord.ui.UserSelect):
+    def __init__(self, controller, requester_id, car_no):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        super().__init__(
+            placeholder="👨‍✈️ 기장 변경",
+            min_values=1,
+            max_values=1,
+            custom_id=f"train:admin:conductor:{self.car_no}",
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        if getattr(target, "bot", False):
+            await interaction.response.send_message(
+                "봇 계정은 기장으로 지정할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.set_conductor(
+                    interaction.guild.id,
+                    self.car_no,
+                    target.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_admin_train_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            name = discord.utils.escape_markdown(
+                getattr(target, "display_name", target.name)
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"👨‍✈️ {self.car_no}호차 기장을 {name}님으로 변경했습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("관리자 모드 기장 변경 오류")
+            await interaction.edit_original_response(
+                content="기장 변경 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainAdminAddPassengerSelect(discord.ui.UserSelect):
+    def __init__(self, controller, requester_id, car_no):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        super().__init__(
+            placeholder="➕ 승객 추가",
+            min_values=1,
+            max_values=1,
+            custom_id=f"train:admin:add:{self.car_no}",
+            row=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        if getattr(target, "bot", False):
+            await interaction.response.send_message(
+                "봇 계정은 승객으로 추가할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.add_passenger(
+                    interaction.guild.id,
+                    self.car_no,
+                    interaction.user.id,
+                    target.id,
+                    force=True,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_admin_train_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            name = discord.utils.escape_markdown(
+                getattr(target, "display_name", target.name)
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"➕ {name}님을 {self.car_no}호차에 추가했습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("관리자 모드 승객 추가 오류")
+            await interaction.edit_original_response(
+                content="승객 추가 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainAdminRemovePassengerSelect(discord.ui.Select):
+    def __init__(self, controller, requester_id, car_no, passenger_options):
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        super().__init__(
+            placeholder="➖ 승객 하차",
+            min_values=1,
+            max_values=1,
+            options=passenger_options,
+            custom_id=f"train:admin:remove:{self.car_no}",
+            row=2,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        user_id = int(self.values[0])
+        member = interaction.guild.get_member(user_id)
+        name = (
+            discord.utils.escape_markdown(member.display_name)
+            if member is not None
+            else f"사용자 {user_id}"
+        )
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.remove_passenger(
+                    interaction.guild.id,
+                    self.car_no,
+                    interaction.user.id,
+                    user_id,
+                    force=True,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_admin_train_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"➖ {name}님을 {self.car_no}호차에서 하차시켰습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("관리자 모드 승객 하차 오류")
+            await interaction.edit_original_response(
+                content="승객 하차 처리 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainAdminEndTimeModal(discord.ui.Modal):
+    def __init__(self, controller, car_no):
+        super().__init__(title=f"{int(car_no)}호차 운행시간 변경", timeout=180)
+        self.controller = controller
+        self.car_no = int(car_no)
+        self.end_time = discord.ui.TextInput(
+            label="새 종료 시각",
+            placeholder="예: 01:30 · 지난 시각이면 자동으로 내일",
+            min_length=4,
+            max_length=5,
+            required=True,
+        )
+        self.add_item(self.end_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if (
+            interaction.guild is None
+            or not can_manage_trains(interaction.user)
+        ):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+        try:
+            ends_at = parse_train_end_time(self.end_time.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "종료 시각은 `HH:MM` 형식으로 입력해주세요. 예: `01:30`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.set_end_time(
+                    interaction.guild.id,
+                    self.car_no,
+                    ends_at,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_admin_train_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"⏰ {self.car_no}호차 종료 시각을 "
+                    f"{format_train_end_time(ends_at)}로 변경했습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("관리자 모드 운행시간 변경 오류")
+            await interaction.edit_original_response(
+                content="운행시간 변경 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainAdminManageView(discord.ui.View):
+    def __init__(
+        self,
+        controller,
+        requester_id,
+        car_no,
+        passenger_options,
+        *,
+        can_add,
+    ):
+        super().__init__(timeout=180)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        self.add_item(
+            TrainAdminConductorSelect(
+                controller, requester_id, car_no
+            )
+        )
+        if can_add:
+            self.add_item(
+                TrainAdminAddPassengerSelect(
+                    controller, requester_id, car_no
+                )
+            )
+        if passenger_options:
+            self.add_item(
+                TrainAdminRemovePassengerSelect(
+                    controller,
+                    requester_id,
+                    car_no,
+                    passenger_options,
+                )
+            )
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 관리자 메뉴는 요청한 관리자만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+        if not can_manage_trains(interaction.user):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="운행시간 변경",
+        emoji="⏰",
+        style=discord.ButtonStyle.secondary,
+        row=3,
+    )
+    async def change_end_time(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.send_modal(
+            TrainAdminEndTimeModal(self.controller, self.car_no)
+        )
+
+    @discord.ui.button(
+        label="열차 종료",
+        emoji="🛑",
+        style=discord.ButtonStyle.danger,
+        row=3,
+    )
+    async def end_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        async def do_end(button_interaction):
+            if not can_manage_trains(button_interaction.user):
+                return "열차 관리 권한이 없습니다."
+            try:
+                async with self.controller.lock_for(interaction.guild.id):
+                    self.controller.repository.end(
+                        interaction.guild.id,
+                        self.car_no,
+                        force=True,
+                    )
+                panel_ok = await self.controller.ensure_panel(interaction.guild)
+                return (
+                    f"🛑 {self.car_no}호차 운행을 종료했습니다."
+                    + self.controller.panel_suffix(panel_ok)
+                )
+            except TrainStateError as error:
+                return await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                )
+
+        await interaction.response.send_message(
+            f"{self.car_no}호차 운행을 종료할까요? 기장과 승객 좌석이 모두 비워집니다.",
+            view=ConfirmTrainView(
+                requester_id=interaction.user.id,
+                confirm_label="운행 종료",
+                action=do_end,
+            ),
+            ephemeral=True,
+            allowed_mentions=NO_MENTIONS,
+        )
+
+    @discord.ui.button(
+        label="열차 목록",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        row=4,
+    )
+    async def back_to_list(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        content, view = await build_admin_picker_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+        )
+        await interaction.response.edit_message(
+            content=content,
+            view=view,
+        )
+
+
 class TrainEndTimeModal(discord.ui.Modal):
     """새 열차 생성 시 기장이 운행 종료 시각을 직접 입력합니다."""
 
@@ -1134,6 +1659,44 @@ class TrainPanelView(discord.ui.View):
             ephemeral=True,
             allowed_mentions=NO_MENTIONS,
         )
+
+    @discord.ui.button(
+        label="관리자 모드",
+        emoji="🛠️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="train:panel:admin",
+        row=1,
+    )
+    async def admin_mode(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.",
+                ephemeral=True,
+            )
+            return
+        if not can_manage_trains(interaction.user):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        content, view = await build_admin_picker_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+        )
+        await interaction.response.send_message(
+            content,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=NO_MENTIONS,
+        )
+
 
 def register(bot):
     controller = TrainController(bot)

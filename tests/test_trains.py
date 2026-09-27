@@ -275,3 +275,43 @@ def test_train_end_time_is_saved_in_snapshot_and_cleared_on_end(repository):
     repository.start(10, 1, 200)
 
     assert repository.snapshot(10)[1]["ends_at"] is None
+
+
+def test_admin_can_change_conductor_without_dropping_other_passengers(repository):
+    repository.start(10, 1, 100, [101, 102], ends_at=1_800_000_000)
+
+    repository.set_conductor(10, 1, 200)
+
+    state = repository.snapshot(10)[1]
+    assert state["conductor_id"] == 200
+    assert state["passenger_ids"] == [101, 102]
+    assert state["ends_at"] == 1_800_000_000
+    assert repository.find_user(10, 100) is None
+
+
+def test_admin_can_promote_existing_passenger_to_conductor(repository):
+    repository.start(10, 1, 100, [101, 102])
+
+    repository.set_conductor(10, 1, 101)
+
+    state = repository.snapshot(10)[1]
+    assert state["conductor_id"] == 101
+    assert state["passenger_ids"] == [102]
+    assert repository.find_user(10, 100) is None
+
+
+def test_admin_cannot_move_member_from_another_train_into_conductor(repository):
+    repository.start(10, 1, 100)
+    repository.start(10, 2, 200)
+
+    error = assert_error("already_boarded", repository.set_conductor, 10, 1, 200)
+    assert error.existing_car == 2
+    assert repository.snapshot(10)[1]["conductor_id"] == 100
+
+
+def test_admin_can_change_train_end_time(repository):
+    repository.start(10, 1, 100, ends_at=1_800_000_000)
+
+    repository.set_end_time(10, 1, 1_900_000_000)
+
+    assert repository.snapshot(10)[1]["ends_at"] == 1_900_000_000

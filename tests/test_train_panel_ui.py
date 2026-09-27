@@ -87,7 +87,15 @@ def test_panel_view_is_persistent_and_has_expected_public_controls():
         "train:panel:leave",
         "train:panel:passengers",
         "train:panel:end",
+        "train:panel:admin",
     }.issubset(custom_ids)
+
+    admin = next(
+        item
+        for item in view.children
+        if getattr(item, "custom_id", None) == "train:panel:admin"
+    )
+    assert admin.row == 1
 
 
 def test_public_leave_button_acknowledges_ephemerally_before_work():
