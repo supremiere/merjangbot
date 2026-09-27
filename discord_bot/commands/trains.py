@@ -1,6 +1,7 @@
 # /열차* 명령과 "우만열차좌석도" 현황판을 관리합니다.
 import asyncio
 import logging
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -15,6 +16,59 @@ PANEL_TITLE = "🚉 **우만역 · 열차 운행 안내**"
 LEGACY_PANEL_TITLES = ("🚆 **우만열차 좌석도**",)
 TRAIN_ADMIN_ROLES = {"자발적 봉사자", "봉사하는 노예", "머장", "관리자"}
 NO_MENTIONS = discord.AllowedMentions.none()
+KST = timezone(timedelta(hours=9))
+
+
+def parse_train_end_time(value, *, now=None):
+    """HH:MM을 KST의 다음 도래 시각으로 변환합니다.
+
+    입력 시각이 이미 지났거나 현재 분과 같으면 자동으로 다음 날로 넘깁니다.
+    """
+    text = str(value).strip()
+    parts = text.split(":")
+    if len(parts) != 2:
+        raise ValueError("invalid_time")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError as exc:
+        raise ValueError("invalid_time") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("invalid_time")
+
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    else:
+        current = current.astimezone(KST)
+
+    target = current.replace(
+        hour=hour,
+        minute=minute,
+        second=0,
+        microsecond=0,
+    )
+    if target <= current:
+        target += timedelta(days=1)
+    return int(target.timestamp())
+
+
+def format_train_end_time(ends_at, *, now=None):
+    target = datetime.fromtimestamp(int(ends_at), KST)
+    current = now or datetime.now(KST)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=KST)
+    else:
+        current = current.astimezone(KST)
+
+    if target.date() == current.date():
+        day_label = "오늘"
+    elif target.date() == current.date() + timedelta(days=1):
+        day_label = "내일"
+    else:
+        day_label = f"{target.month}/{target.day}"
+    return f"{day_label} {target:%H:%M}"
+
 
 def can_manage_trains(member):
     guild = getattr(member, "guild", None)
@@ -124,10 +178,17 @@ class TrainController:
             ]
             passenger_text = " · ".join(passenger_names) if passenger_names else "승객 없음"
 
-            lines.extend(
+            ends_at = state.get("ends_at")
+            car_lines = [
+                f"┏━━━━━━ 🚃 {car_no}호차 ━━━━━━┓",
+                f"┃  {icon} {status}  ·  `{count} / {TRAIN_CAPACITY}`",
+            ]
+            if ends_at is not None:
+                car_lines.append(
+                    f"┃  ⏰ 종료 예정  {format_train_end_time(ends_at)} · <t:{int(ends_at)}:R>"
+                )
+            car_lines.extend(
                 [
-                    f"┏━━━━━━ 🚃 {car_no}호차 ━━━━━━┓",
-                    f"┃  {icon} {status}  ·  `{count} / {TRAIN_CAPACITY}`",
                     "┃",
                     f"┃  👨‍✈️ 기장  {conductor_name}",
                     f"┃  💺 승객  {passenger_text}",
@@ -135,6 +196,7 @@ class TrainController:
                     "",
                 ]
             )
+            lines.extend(car_lines)
         return "\n".join(lines).rstrip()
 
     async def _find_or_create_channel(self, guild):
@@ -251,7 +313,7 @@ class TrainController:
                     )
         return True
 
-    async def announce_train_arrival(self, guild, car_no):
+    async def announce_train_arrival(self, guild, car_no, ends_at=None):
         channel = discord.utils.get(guild.text_channels, name=CHAT_CHANNEL_NAME)
         if channel is None:
             # 일부 서버/클라이언트에서 이모지 없이 채널명이 구성된 경우도 허용합니다.
@@ -265,8 +327,14 @@ class TrainController:
             return False
 
         try:
+            content = f"🚆 {car_no}호차가 플랫폼에 도착했습니다. 서둘러 탑승해주세요!"
+            if ends_at is not None:
+                content += (
+                    f"\n⏰ 운행 종료 예정: {format_train_end_time(ends_at)}"
+                    f" · <t:{int(ends_at)}:R>"
+                )
             await channel.send(
-                f"🚆 {car_no}호차가 플랫폼에 도착했습니다. 서둘러 탑승해주세요!",
+                content,
                 allowed_mentions=NO_MENTIONS,
             )
             return True
@@ -703,6 +771,91 @@ class TrainPassengerManageView(discord.ui.View):
         return False
 
 
+class TrainEndTimeModal(discord.ui.Modal):
+    """새 열차 생성 시 기장이 운행 종료 시각을 직접 입력합니다."""
+
+    def __init__(self, controller):
+        super().__init__(title="새 열차 만들기", timeout=180)
+        self.controller = controller
+        self.end_time = discord.ui.TextInput(
+            label="운행 종료 시각",
+            placeholder="예: 01:30 · 지난 시각이면 자동으로 내일",
+            min_length=4,
+            max_length=5,
+            required=True,
+        )
+        self.add_item(self.end_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            ends_at = parse_train_end_time(self.end_time.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "종료 시각은 `HH:MM` 형식으로 입력해주세요. 예: `01:30`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                existing = self.controller.repository.find_user(
+                    interaction.guild.id,
+                    interaction.user.id,
+                )
+                if existing is not None:
+                    raise TrainStateError(
+                        "already_boarded",
+                        user_id=interaction.user.id,
+                        existing_car=existing.car_no,
+                    )
+
+                car_no = self.controller.repository.next_available_car(
+                    interaction.guild.id
+                )
+                self.controller.repository.start(
+                    interaction.guild.id,
+                    car_no,
+                    interaction.user.id,
+                    ends_at=ends_at,
+                )
+
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            await self.controller.announce_train_arrival(
+                interaction.guild,
+                car_no,
+                ends_at,
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"🚆 {car_no}호차를 만들었습니다. 기장으로 등록했습니다.\n"
+                    f"⏰ 운행 종료 예정: {format_train_end_time(ends_at)}"
+                    f" · <t:{ends_at}:R>"
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild,
+                    error,
+                    interaction.user.id,
+                ),
+            )
+        except Exception:
+            logger.exception("좌석도 새 열차 만들기 모달 오류")
+            await interaction.edit_original_response(
+                content="열차 생성 처리 중 오류가 발생했습니다.",
+            )
+
+
 class TrainPanelView(discord.ui.View):
     """좌석도 메시지에 항상 붙어 있는 사용자용 열차 UI."""
 
@@ -753,45 +906,25 @@ class TrainPanelView(discord.ui.View):
                 "이 기능은 서버 안에서 사용해주세요.", ephemeral=True
             )
             return
-        await interaction.response.defer(ephemeral=True, thinking=True)
-        try:
-            async with self.controller.lock_for(interaction.guild.id):
-                existing = self.controller.repository.find_user(
-                    interaction.guild.id, interaction.user.id
-                )
-                if existing is not None:
-                    raise TrainStateError(
-                        "already_boarded",
-                        user_id=interaction.user.id,
-                        existing_car=existing.car_no,
-                    )
-                car_no = self.controller.repository.next_available_car(
-                    interaction.guild.id
-                )
-                self.controller.repository.start(
-                    interaction.guild.id,
-                    car_no,
-                    interaction.user.id,
-                )
-            panel_ok = await self.controller.ensure_panel(interaction.guild)
-            await self.controller.announce_train_arrival(interaction.guild, car_no)
-            await interaction.edit_original_response(
-                content=(
-                    f"🚆 {car_no}호차를 만들었습니다. 기장으로 등록했습니다."
-                    + self.controller.panel_suffix(panel_ok)
+
+        existing = self.controller.repository.find_user(
+            interaction.guild.id,
+            interaction.user.id,
+        )
+        if existing is not None:
+            await interaction.response.send_message(
+                (
+                    f"이미 {existing.car_no}호차에 탑승 중입니다."
+                    if existing.role == "passenger"
+                    else f"현재 {existing.car_no}호차 기장입니다."
                 ),
+                ephemeral=True,
             )
-        except TrainStateError as error:
-            await interaction.edit_original_response(
-                content=await self.controller.error_text(
-                    interaction.guild, error, interaction.user.id
-                ),
-            )
-        except Exception:
-            logger.exception("좌석도 새 열차 만들기 오류")
-            await interaction.edit_original_response(
-                content="열차 생성 처리 중 오류가 발생했습니다.",
-            )
+            return
+
+        await interaction.response.send_modal(
+            TrainEndTimeModal(self.controller)
+        )
 
     @discord.ui.button(
         label="열차 탑승",
