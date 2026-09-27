@@ -780,8 +780,10 @@ async def build_admin_picker_view(controller, guild, requester_id):
     }
     if not active:
         return (
-            "🛠️ **관리자 모드**\n현재 운행 중인 열차가 없습니다.",
-            None,
+            "🛠️ **관리자 모드**\n"
+            "현재 운행 중인 열차가 없습니다.\n"
+            "아래 `새 열차 추가`에서 기장을 선택해 새 열차를 만들 수 있습니다.",
+            TrainAdminPickerView(controller, requester_id, active),
         )
 
     extra = (
@@ -790,7 +792,8 @@ async def build_admin_picker_view(controller, guild, requester_id):
         else ""
     )
     return (
-        "🛠️ **관리자 모드**\n편집할 열차를 선택하세요." + extra,
+        "🛠️ **관리자 모드**\n"
+        "편집할 열차를 선택하거나 새 열차를 추가하세요." + extra,
         TrainAdminPickerView(controller, requester_id, active),
     )
 
@@ -882,11 +885,79 @@ class TrainAdminCarSelect(discord.ui.Select):
         await interaction.edit_original_response(content=content, view=view)
 
 
-class TrainAdminPickerView(discord.ui.View):
-    def __init__(self, controller, requester_id, snapshot):
-        super().__init__(timeout=180)
+class TrainAdminCreateConductorSelect(discord.ui.UserSelect):
+    def __init__(self, controller, requester_id):
+        self.controller = controller
         self.requester_id = int(requester_id)
-        self.add_item(TrainAdminCarSelect(controller, requester_id, snapshot))
+        super().__init__(
+            placeholder="👨‍✈️ 새 열차의 기장을 선택하세요",
+            min_values=1,
+            max_values=1,
+            custom_id="train:admin:create-conductor",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        target = self.values[0]
+        if getattr(target, "bot", False):
+            await interaction.response.send_message(
+                "봇 계정은 기장으로 지정할 수 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                car_no = self.controller.repository.next_available_car(
+                    interaction.guild.id
+                )
+                self.controller.repository.start(
+                    interaction.guild.id,
+                    car_no,
+                    target.id,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_admin_train_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                car_no,
+            )
+            name = discord.utils.escape_markdown(
+                getattr(target, "display_name", target.name)
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"🚆 {car_no}호차를 추가하고 {name}님을 기장으로 지정했습니다.\n"
+                    "⏰ 운행 종료 시각은 아래 `운행시간 변경`에서 설정할 수 있습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild, error, interaction.user.id
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("관리자 모드 새 열차 추가 오류")
+            await interaction.edit_original_response(
+                content="새 열차 추가 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
+class TrainAdminCreateView(discord.ui.View):
+    def __init__(self, controller, requester_id):
+        super().__init__(timeout=180)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.add_item(
+            TrainAdminCreateConductorSelect(controller, requester_id)
+        )
 
     async def interaction_check(self, interaction):
         if interaction.user.id != self.requester_id:
@@ -902,6 +973,75 @@ class TrainAdminPickerView(discord.ui.View):
             )
             return False
         return True
+
+    @discord.ui.button(
+        label="열차 목록",
+        emoji="↩️",
+        style=discord.ButtonStyle.secondary,
+        row=1,
+        custom_id="train:admin:create-back",
+    )
+    async def back_to_list(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        content, view = await build_admin_picker_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+        )
+        await interaction.response.edit_message(content=content, view=view)
+
+
+class TrainAdminPickerView(discord.ui.View):
+    def __init__(self, controller, requester_id, snapshot):
+        super().__init__(timeout=180)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        if snapshot:
+            self.add_item(
+                TrainAdminCarSelect(controller, requester_id, snapshot)
+            )
+
+    async def interaction_check(self, interaction):
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 관리자 메뉴는 요청한 관리자만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return False
+        if not can_manage_trains(interaction.user):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    @discord.ui.button(
+        label="새 열차 추가",
+        emoji="➕",
+        style=discord.ButtonStyle.success,
+        row=1,
+        custom_id="train:admin:create",
+    )
+    async def create_train(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        await interaction.response.edit_message(
+            content=(
+                "➕ **새 열차 추가**\n"
+                "새 열차의 기장을 선택하세요. "
+                "운행 종료 시각은 생성 후 관리자 메뉴에서 설정할 수 있습니다."
+            ),
+            view=TrainAdminCreateView(
+                self.controller,
+                interaction.user.id,
+            ),
+        )
 
 
 class TrainAdminConductorSelect(discord.ui.UserSelect):
