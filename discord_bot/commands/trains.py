@@ -1660,6 +1660,44 @@ class TrainPanelView(discord.ui.View):
             allowed_mentions=NO_MENTIONS,
         )
 
+    @discord.ui.button(
+        label="관리자 모드",
+        emoji="🛠️",
+        style=discord.ButtonStyle.secondary,
+        custom_id="train:panel:admin",
+        row=1,
+    )
+    async def admin_mode(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.",
+                ephemeral=True,
+            )
+            return
+        if not can_manage_trains(interaction.user):
+            await interaction.response.send_message(
+                "열차 관리 권한이 없습니다.",
+                ephemeral=True,
+            )
+            return
+
+        content, view = await build_admin_picker_view(
+            self.controller,
+            interaction.guild,
+            interaction.user.id,
+        )
+        await interaction.response.send_message(
+            content,
+            view=view,
+            ephemeral=True,
+            allowed_mentions=NO_MENTIONS,
+        )
+
+
 def register(bot):
     controller = TrainController(bot)
     controller.panel_view = TrainPanelView(controller)
