@@ -5,11 +5,13 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from discord_bot.commands.trains import (
+    TrainAdminManageView,
     TrainAdminPickerView,
     TrainPanelView,
     TrainPassengerManageView,
     build_admin_picker_view,
     format_train_end_time,
+    parse_discord_user_id,
     parse_train_end_time,
 )
 from storage.trains import TrainStateError
@@ -286,3 +288,54 @@ def test_conductor_train_management_combines_passengers_and_end_time():
         getattr(item, "custom_id", "").startswith("train:manage:add:")
         for item in view.children
     )
+
+
+def test_parse_discord_user_id_accepts_raw_id_and_mentions():
+    user_id = 123456789012345678
+    assert parse_discord_user_id(str(user_id)) == user_id
+    assert parse_discord_user_id(f"<@{user_id}>") == user_id
+    assert parse_discord_user_id(f"<@!{user_id}>") == user_id
+
+
+def test_parse_discord_user_id_rejects_names_and_short_numbers():
+    for value in ("nickname", "@nickname", "12345", "<@12345>"):
+        try:
+            parse_discord_user_id(value)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"{value!r} should be rejected")
+
+
+def test_conductor_train_management_has_offline_direct_add_button():
+    view = TrainPassengerManageView(
+        FakeController(FakeRepository()),
+        requester_id=100,
+        car_no=1,
+        passenger_options=[],
+        can_add=True,
+    )
+
+    labels = {
+        getattr(item, "label", None)
+        for item in view.children
+        if getattr(item, "label", None)
+    }
+    assert "ID/멘션으로 추가" in labels
+
+
+def test_admin_train_management_has_offline_direct_add_button():
+    view = TrainAdminManageView(
+        FakeController(FakeRepository()),
+        requester_id=100,
+        car_no=1,
+        passenger_options=[],
+        can_add=True,
+    )
+
+    labels = {
+        getattr(item, "label", None)
+        for item in view.children
+        if getattr(item, "label", None)
+    }
+    assert "ID/멘션으로 추가" in labels
