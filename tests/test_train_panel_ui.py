@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from discord_bot.commands.trains import (
     TrainAdminPickerView,
     TrainPanelView,
+    TrainPassengerManageView,
     build_admin_picker_view,
     format_train_end_time,
     parse_train_end_time,
@@ -91,6 +92,13 @@ def test_panel_view_is_persistent_and_has_expected_public_controls():
         "train:panel:end",
         "train:panel:admin",
     }.issubset(custom_ids)
+
+    manage = next(
+        item
+        for item in view.children
+        if getattr(item, "custom_id", None) == "train:panel:passengers"
+    )
+    assert manage.label == "열차 관리"
 
     admin = next(
         item
@@ -255,5 +263,26 @@ def test_empty_admin_picker_returns_create_capable_view():
     assert isinstance(view, TrainAdminPickerView)
     assert any(
         getattr(item, "custom_id", None) == "train:admin:create"
+        for item in view.children
+    )
+
+
+def test_conductor_train_management_combines_passengers_and_end_time():
+    view = TrainPassengerManageView(
+        FakeController(FakeRepository()),
+        requester_id=100,
+        car_no=1,
+        passenger_options=[],
+        can_add=True,
+    )
+
+    labels = {
+        getattr(item, "label", None)
+        for item in view.children
+        if getattr(item, "label", None)
+    }
+    assert "운행시간 수정" in labels
+    assert any(
+        getattr(item, "custom_id", "").startswith("train:manage:add:")
         for item in view.children
     )

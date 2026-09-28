@@ -568,10 +568,17 @@ async def build_passenger_manage_view(controller, guild, requester_id, car_no):
         )
 
     count = 1 + len(passenger_ids)
+    ends_at = state.get("ends_at")
+    end_text = (
+        f"{format_train_end_time(ends_at)} · <t:{int(ends_at)}:R>"
+        if ends_at is not None
+        else "미설정"
+    )
     content = (
-        f"👥 **{int(car_no)}호차 승객 관리**\n"
-        f"현재 좌석: {count}/{TRAIN_CAPACITY}\n"
-        f"승객: {', '.join(passenger_names) if passenger_names else '-'}"
+        f"⚙️ **{int(car_no)}호차 열차 관리**\n"
+        f"👥 현재 좌석: {count}/{TRAIN_CAPACITY}\n"
+        f"💺 승객: {', '.join(passenger_names) if passenger_names else '-'}\n"
+        f"⏰ 종료 예정: {end_text}"
     )
     return (
         content,
@@ -601,7 +608,7 @@ class TrainPassengerAddSelect(discord.ui.UserSelect):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+                "이 열차 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
                 ephemeral=True,
             )
             return
@@ -678,7 +685,7 @@ class TrainPassengerRemoveSelect(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.requester_id:
             await interaction.response.send_message(
-                "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+                "이 열차 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
                 ephemeral=True,
             )
             return
@@ -735,6 +742,112 @@ class TrainPassengerRemoveSelect(discord.ui.Select):
             )
 
 
+class TrainConductorEndTimeModal(discord.ui.Modal):
+    """기장이 자신의 열차 운행 종료 시각을 수정합니다."""
+
+    def __init__(self, controller, requester_id, car_no):
+        super().__init__(title=f"{int(car_no)}호차 운행시간 수정", timeout=180)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
+        self.end_time = discord.ui.TextInput(
+            label="새 종료 시각",
+            placeholder="예: 01:30 · 지난 시각이면 자동으로 내일",
+            min_length=4,
+            max_length=5,
+            required=True,
+        )
+        self.add_item(self.end_time)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.",
+                ephemeral=True,
+            )
+            return
+        if interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "이 열차 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+                ephemeral=True,
+            )
+            return
+
+        state = self.controller.repository.snapshot(interaction.guild.id).get(
+            self.car_no
+        )
+        if (
+            state is None
+            or state["conductor_id"] != interaction.user.id
+        ):
+            await interaction.response.send_message(
+                "현재 이 열차의 기장이 아닙니다.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            ends_at = parse_train_end_time(self.end_time.value)
+        except ValueError:
+            await interaction.response.send_message(
+                "종료 시각은 `HH:MM` 형식으로 입력해주세요. 예: `01:30`",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                state = self.controller.repository.snapshot(
+                    interaction.guild.id
+                ).get(self.car_no)
+                if (
+                    state is None
+                    or state["conductor_id"] != interaction.user.id
+                ):
+                    raise TrainStateError(
+                        "not_conductor",
+                        car_no=self.car_no,
+                    )
+                self.controller.repository.set_end_time(
+                    interaction.guild.id,
+                    self.car_no,
+                    ends_at,
+                )
+
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            content, view = await build_passenger_manage_view(
+                self.controller,
+                interaction.guild,
+                interaction.user.id,
+                self.car_no,
+            )
+            await interaction.edit_original_response(
+                content=(
+                    f"⏰ {self.car_no}호차 종료 시각을 "
+                    f"{format_train_end_time(ends_at)}로 수정했습니다.\n\n"
+                    + content
+                    + self.controller.panel_suffix(panel_ok)
+                ),
+                view=view,
+            )
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(
+                    interaction.guild,
+                    error,
+                    interaction.user.id,
+                ),
+                view=None,
+            )
+        except Exception:
+            logger.exception("기장 열차 관리 운행시간 수정 오류")
+            await interaction.edit_original_response(
+                content="운행시간 수정 중 오류가 발생했습니다.",
+                view=None,
+            )
+
+
 class TrainPassengerManageView(discord.ui.View):
     def __init__(
         self,
@@ -746,7 +859,9 @@ class TrainPassengerManageView(discord.ui.View):
         can_add,
     ):
         super().__init__(timeout=180)
+        self.controller = controller
         self.requester_id = int(requester_id)
+        self.car_no = int(car_no)
         if can_add:
             self.add_item(
                 TrainPassengerAddSelect(controller, requester_id, car_no)
@@ -765,10 +880,49 @@ class TrainPassengerManageView(discord.ui.View):
         if interaction.user.id == self.requester_id:
             return True
         await interaction.response.send_message(
-            "이 승객 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
+            "이 열차 관리 메뉴는 해당 열차 기장만 사용할 수 있습니다.",
             ephemeral=True,
         )
         return False
+
+    @discord.ui.button(
+        label="운행시간 수정",
+        emoji="⏰",
+        style=discord.ButtonStyle.secondary,
+        row=2,
+    )
+    async def change_end_time(
+        self,
+        interaction: discord.Interaction,
+        button: discord.ui.Button,
+    ):
+        if interaction.guild is None:
+            await interaction.response.send_message(
+                "이 기능은 서버 안에서 사용해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        state = self.controller.repository.snapshot(interaction.guild.id).get(
+            self.car_no
+        )
+        if (
+            state is None
+            or state["conductor_id"] != interaction.user.id
+        ):
+            await interaction.response.send_message(
+                "현재 이 열차의 기장이 아닙니다.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.send_modal(
+            TrainConductorEndTimeModal(
+                self.controller,
+                interaction.user.id,
+                self.car_no,
+            )
+        )
 
 
 async def build_admin_picker_view(controller, guild, requester_id):
@@ -1704,8 +1858,8 @@ class TrainPanelView(discord.ui.View):
             )
 
     @discord.ui.button(
-        label="승객 관리",
-        emoji="👥",
+        label="열차 관리",
+        emoji="⚙️",
         style=discord.ButtonStyle.secondary,
         custom_id="train:panel:passengers",
     )
