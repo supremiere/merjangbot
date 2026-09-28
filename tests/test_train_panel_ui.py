@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from discord_bot.commands.trains import (
+    TrainAdminManageView,
     TrainAdminPickerView,
     TrainPanelView,
     TrainPassengerManageView,
@@ -308,6 +309,23 @@ def test_parse_discord_user_id_rejects_names_and_short_numbers():
 
 def test_conductor_train_management_has_offline_direct_add_button():
     view = TrainPassengerManageView(
+        FakeController(FakeRepository()),
+        requester_id=100,
+        car_no=1,
+        passenger_options=[],
+        can_add=True,
+    )
+
+    labels = {
+        getattr(item, "label", None)
+        for item in view.children
+        if getattr(item, "label", None)
+    }
+    assert "ID/멘션으로 추가" in labels
+
+
+def test_admin_train_management_has_offline_direct_add_button():
+    view = TrainAdminManageView(
         FakeController(FakeRepository()),
         requester_id=100,
         car_no=1,
