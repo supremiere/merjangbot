@@ -6,6 +6,8 @@ import discord
 from discord import app_commands
 
 from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot, trains
+from discord_bot.commands import drop_stats
+from services.drop_stats import DropStatsService
 from discord_bot.jobs.abyss import AbyssJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
 from discord_bot.jobs.notices import NoticeJobs
@@ -49,6 +51,8 @@ class MerjangBot(discord.Client):
         self.subscriptions = subscriptions
         self.open_subscriptions = open_subscriptions
         self.rune_stats = rune_stats_service
+        self.drop_stats = DropStatsService(getattr(settings,'drop_stats_origin',''),
+                                          getattr(settings,'drop_stats_key',''))
         self.tree = app_commands.CommandTree(self)
         self._synced_guilds = set()
         self._global_commands_cleared = False
@@ -59,6 +63,8 @@ class MerjangBot(discord.Client):
         # 중단: /악보, /어비스랭킹
         for module in (market, cleanup, rune_stats, server_status, abyss, test_bot, trains):
             module.register(self)
+        if getattr(settings,'drop_stats_guild_id',0):
+            drop_stats.register(self)
         self.jobs = [
             NoticeJobs(self),
             ServerStatusJobs(self),

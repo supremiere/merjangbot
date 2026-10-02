@@ -18,6 +18,9 @@ class Settings:
     db_file: Path
     moblife_api_key: str = ""
     moblife_eab_key: str = DEFAULT_EAB_KEY
+    drop_stats_origin: str = ''
+    drop_stats_key: str = ''
+    drop_stats_guild_id: int = 0
 
     @classmethod
     def from_env(cls, env_file=None):
@@ -49,4 +52,7 @@ class Settings:
             db_file=db_file,
             moblife_api_key=os.getenv("MOBLIFE_API_KEY", "").strip(),
             moblife_eab_key=os.getenv("MOBLIFE_EAB_KEY", DEFAULT_EAB_KEY),
+            drop_stats_origin=os.getenv('DROP_STATS_ORIGIN','').strip(),
+            drop_stats_key=os.getenv('DROP_STATS_READ_KEY','').strip(),
+            drop_stats_guild_id=int(os.getenv('DROP_STATS_GUILD_ID','0') or '0'),
         )
