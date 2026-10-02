@@ -142,5 +142,18 @@ class Database:
                     maintenance_start TEXT PRIMARY KEY,
                     sent_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS maintenance_reminder_events (
+                    maintenance_start TEXT NOT NULL,
+                    reminder_kind TEXT NOT NULL,
+                    sent_at TEXT NOT NULL,
+                    PRIMARY KEY (maintenance_start, reminder_kind)
+                );
+                INSERT OR IGNORE INTO maintenance_reminder_events
+                    (maintenance_start, reminder_kind, sent_at)
+                SELECT maintenance_start,
+                    CASE WHEN strftime('%H:%M', maintenance_start, '+9 hours') = '06:00'
+                        THEN '12h' ELSE '30m' END,
+                    sent_at
+                FROM maintenance_reminders;
             """)
             self._initialize_train_tables(conn)
