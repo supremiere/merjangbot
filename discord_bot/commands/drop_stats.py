@@ -39,18 +39,20 @@ def build_embed(data,kind):
             amounts = {row['item']: int(row['amount']) for row in data.get('items',[]) if row['mode']==mode}
             total = sum(int(row['runs']) for row in data.get('runs',[]) if row['mode']==mode)
             by_dungeon = {row['dungeon']: int(row['runs']) for row in data.get('dungeon_runs',[]) if row['mode']==mode}
-            # Old reports have no dungeon field. Keep their quantities and runs
-            # visible, explicitly using the whole mode rather than guessing a floor.
-            legacy = total > sum(by_dungeon.values())
+            # Unclassified history is a separate total, never every dungeon's denominator.
+            unclassified = max(0,total - sum(by_dungeon.values()))
             rows = []
             for item,dungeon in CATALOG[mode].items():
-                runs = total if legacy else by_dungeon.get(dungeon,0)
+                runs = by_dungeon.get(dungeon,0)
                 amount = amounts.get(item,0)
-                rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
+                rate = f'{amount / runs * 100:.1f}%' if runs > 0 and not unclassified else '—'
                 short = item.replace('의 영혼석','').replace('의 마력석','')
                 rows.append((short,f'{amount:,}개',f'{runs:,}판',rate))
-            scope = ('던전 전체' if mode=='dungeon' else '어비스 전체') if legacy else '던전별'
-            embed.add_field(name=f'{label} · {scope} 기준',value=compact_table(rows),inline=False)
+            value = compact_table(rows)
+            if unclassified:
+                amount = sum(amounts.get(item,0) for item in CATALOG[mode])
+                value += f'\n미분류 {unclassified:,}판 · 전체 {amount / total * 100:.1f}%'
+            embed.add_field(name=f'{label} · 던전별 기준',value=value,inline=False)
         runs = sum(int(row['runs']) for row in data.get('runs',[]))
         embed.add_field(name='햄순이로 완료한 횟수',value=f'{runs:,}회',inline=False)
     embed.set_footer(text=FOOTER)
