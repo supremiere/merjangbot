@@ -30,28 +30,40 @@ def test_stats_and_personal_records_use_hamsuni_completion_label():
         assert field.value == '15회'
 
 
-def test_drop_rates_use_each_dungeon_sample_not_stone_quantity_or_all_runs():
+def test_rates_use_quantity_and_known_dungeon_completions():
     data = {**DATA, 'items': [{'mode':'dungeon','item':'야생의 영혼석','amount':99}],
-            'runs':[{'mode':'dungeon','runs':1000}],
+            'runs':[{'mode':'dungeon','runs':50}],
+            'dungeon_runs':[{'mode':'dungeon','dungeon':'피오드 던전 1층','runs':40},
+                            {'mode':'dungeon','dungeon':'피오드 던전 2층','runs':10}],
             'observations':[{'mode':'dungeon','item':'야생의 영혼석','observed_runs':40,'hit_runs':5},
                             {'mode':'dungeon','item':'삼림의 영혼석','observed_runs':10,'hit_runs':0},
                             {'mode':'abyss','item':'허상의 마력석','observed_runs':3,'hit_runs':3}]}
     embed = build_embed(data,'stats')
-    assert '야생의 영혼석 — 12.5%' in embed.fields[0].value
-    assert '획득 5/40판' in embed.fields[0].value
-    assert '오늘 99개' in embed.fields[0].value
-    assert '삼림의 영혼석 — 0.0%' in embed.fields[0].value
-    assert '공명의 영혼석 — 집계 중' in embed.fields[0].value
-    assert '허상의 마력석 — 100.0%' in embed.fields[1].value
+    first = embed.fields[0]
+    assert first.name == '영혼석 · 던전별 기준'
+    assert '99개' in first.value and '40판' in first.value and '247.5%' in first.value
+    assert '0.0%' in first.value
+    assert '집계 중' not in str(embed.to_dict())
+    assert '새 관측' not in str(embed.to_dict())
     assert all(len(field.value) <= 1024 for field in embed.fields)
 
 
-def test_legacy_totals_without_samples_are_not_presented_as_drop_probability():
-    embed = build_embed({**DATA,'items':[{'mode':'dungeon','item':'야생의 영혼석','amount':10}],
-                        'runs':[{'mode':'dungeon','runs':100}]},'mine')
-    assert '야생의 영혼석 — 집계 중' in embed.fields[0].value
-    assert '오늘 10개' in embed.fields[0].value
-    assert '%' not in embed.fields[0].value
+def test_existing_quantities_and_unclassified_runs_remain_visible():
+    data = {**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':59}],
+            'runs':[{'mode':'abyss','runs':713}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':3}]}
+    for kind in ('stats','mine'):
+        embed = build_embed(data,kind)
+        assert embed.fields[1].name == '마력석 · 어비스 전체 기준'
+        assert '59개' in embed.fields[1].value and '713판' in embed.fields[1].value
+        assert '8.3%' in embed.fields[1].value
+        assert embed.fields[-1].value == '713회'
+
+
+def test_no_completion_never_divides_by_zero_or_invents_a_rate():
+    embed = build_embed({**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':59}]},'stats')
+    assert '59개' in embed.fields[1].value and '—' in embed.fields[1].value
+    assert '0.0%' not in embed.fields[1].value
 
 def test_stats_are_restricted_to_guild_and_personal_identity():
     async def scenario():

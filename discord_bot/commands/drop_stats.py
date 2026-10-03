@@ -1,6 +1,7 @@
 import discord
+from unicodedata import east_asian_width
 
-FOOTER = '한국 시간 오늘 기준 · 앱에서 확인한 가방 수량 증가 · 구매·거래 포함 가능'
+FOOTER = '한국 시간 오늘 · 가방 증가량 기준(구매·거래 포함)'
 CATALOG = {
     'dungeon': {'야생의 영혼석': '피오드 던전 1층', '삼림의 영혼석': '피오드 던전 2층',
                 '공명의 영혼석': '룬다 던전 1층', '파동의 영혼석': '룬다 던전 2층',
@@ -12,6 +13,17 @@ def safe_nickname(value):
     value = ''.join(c for c in str(value) if c.isprintable()).replace('\u202e','')[:40]
     return discord.utils.escape_markdown(discord.utils.escape_mentions(value))
 
+
+def compact_table(rows):
+    rows = [('돌', '획득', '완료', '획득률'), *rows]
+    def width(text):
+        return sum(2 if east_asian_width(c) in 'WF' else 1 for c in text)
+    widths = [max(width(row[i]) for row in rows) for i in range(4)]
+    lines = []
+    for row in rows:
+        lines.append('  '.join(text + ' '*(widths[i]-width(text)) for i,text in enumerate(row)).rstrip())
+    return '```\n' + '\n'.join(lines) + '\n```'
+
 def build_embed(data,kind):
     title = {'stats':'오늘 드랍 통계','ranking':'오늘 수량 랭킹','mine':'내 오늘 기록'}[kind]
     embed = discord.Embed(title=title,description=data['day'],color=0x23D9C3)
@@ -22,19 +34,23 @@ def build_embed(data,kind):
                     for i,row in enumerate(leaders[:5],1)]
             embed.add_field(name=label,value='\n'.join(rows) or '아직 기록이 없습니다.',inline=False)
     else:
-        embed.description += '\n던전별 관측 획득률 · 돌을 얻은 판수 / 확인한 완료 판수'
+        embed.description += ' · 획득 개수 ÷ 완료 판수'
         for mode,label in [('dungeon','영혼석'),('abyss','마력석')]:
             amounts = {row['item']: int(row['amount']) for row in data.get('items',[]) if row['mode']==mode}
-            samples = {row['item']: row for row in data.get('observations',[]) if row['mode']==mode}
+            total = sum(int(row['runs']) for row in data.get('runs',[]) if row['mode']==mode)
+            by_dungeon = {row['dungeon']: int(row['runs']) for row in data.get('dungeon_runs',[]) if row['mode']==mode}
+            # Old reports have no dungeon field. Keep their quantities and runs
+            # visible, explicitly using the whole mode rather than guessing a floor.
+            legacy = total > sum(by_dungeon.values())
             rows = []
             for item,dungeon in CATALOG[mode].items():
-                sample = samples.get(item,{})
-                observed,hits = int(sample.get('observed_runs',0)),int(sample.get('hit_runs',0))
-                valid = observed > 0 and 0 <= hits <= observed
-                rate = f'{hits / observed * 100:.1f}%' if valid else '집계 중'
-                detail = f'획득 {hits:,}/{observed:,}판' if valid else '새 관측 기록이 쌓이면 표시됩니다'
-                rows.append(f'**{item} — {rate}**\n{dungeon} · {detail} · 오늘 {amounts.get(item,0):,}개')
-            embed.add_field(name=label,value='\n\n'.join(rows),inline=False)
+                runs = total if legacy else by_dungeon.get(dungeon,0)
+                amount = amounts.get(item,0)
+                rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
+                short = item.replace('의 영혼석','').replace('의 마력석','')
+                rows.append((short,f'{amount:,}개',f'{runs:,}판',rate))
+            scope = ('던전 전체' if mode=='dungeon' else '어비스 전체') if legacy else '던전별'
+            embed.add_field(name=f'{label} · {scope} 기준',value=compact_table(rows),inline=False)
         runs = sum(int(row['runs']) for row in data.get('runs',[]))
         embed.add_field(name='햄순이로 완료한 횟수',value=f'{runs:,}회',inline=False)
     embed.set_footer(text=FOOTER)
@@ -56,7 +72,7 @@ async def respond(bot,interaction,kind):
         await interaction.followup.send(str(error),ephemeral=True)
 
 def register(bot):
-    @bot.tree.command(name='드랍통계',description='오늘 던전별 영혼석·마력석 획득률과 수량을 확인합니다.')
+    @bot.tree.command(name='드랍통계',description='오늘 영혼석·마력석 수량과 완료 대비 획득률을 확인합니다.')
     @discord.app_commands.guild_only()
     async def stats(interaction: discord.Interaction):
         await respond(bot,interaction,'stats')
