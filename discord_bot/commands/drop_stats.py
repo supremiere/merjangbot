@@ -45,7 +45,7 @@ def build_embed(data,kind):
             for item,dungeon in CATALOG[mode].items():
                 runs = by_dungeon.get(dungeon,0)
                 amount = amounts.get(item,0)
-                rate = f'{amount / runs * 100:.1f}%' if runs > 0 and not unclassified else '—'
+                rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
                 short = item.replace('의 영혼석','').replace('의 마력석','')
                 rows.append((short,f'{amount:,}개',f'{runs:,}판',rate))
             value = compact_table(rows)
