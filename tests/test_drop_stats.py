@@ -93,6 +93,18 @@ def test_unclassified_only_counts_are_not_repeated_for_every_dungeon():
     assert embed.fields[-1].value == '857회'
 
 
+def test_unclassified_runs_do_not_hide_a_known_dungeon_rate():
+    data = {**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':84}],
+            'runs':[{'mode':'abyss','runs':877}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':873}]}
+    for kind in ('stats','mine'):
+        value=build_embed(data,kind).fields[1].value
+        harbor=next(row for row in value.splitlines() if row.startswith('허상'))
+        assert '84개' in harbor and '873판' in harbor and '9.6%' in harbor
+        assert '미분류 4판' in value
+        assert value.count('873판') == 1
+
+
 def test_no_completion_never_divides_by_zero_or_invents_a_rate():
     embed = build_embed({**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':59}]},'stats')
     assert '59개' in embed.fields[1].value and '—' in embed.fields[1].value
