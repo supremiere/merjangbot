@@ -12,6 +12,7 @@ from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
 logger = logging.getLogger(__name__)
 
 CHANNEL_NAME = "우만열차좌석도"
+CHANNEL_ID = 1553289644748316732
 CHAT_CHANNEL_NAME = "💬자유-채팅"
 PANEL_TITLE = "🚉 **우만역 · 열차 운행 안내**"
 LEGACY_PANEL_TITLES = ("🚆 **우만열차 좌석도**",)
@@ -222,43 +223,25 @@ class TrainController:
             lines.extend(car_lines)
         return "\n".join(lines).rstrip()
 
-    async def _find_or_create_channel(self, guild):
-        channel = discord.utils.get(guild.text_channels, name=CHANNEL_NAME)
-        if channel is not None:
-            return channel
-
-        me = guild.me
-        if me is None or not me.guild_permissions.manage_channels:
+    async def _find_channel(self, guild):
+        channel = discord.utils.get(guild.text_channels, id=CHANNEL_ID)
+        if channel is None:
             logger.warning(
-                "%s 서버에 #%s 채널이 없고 채널 생성 권한도 없습니다.",
+                "%s 서버에서 우만열차 현황판 채널 ID %s를 찾지 못했습니다.",
                 guild.name,
-                CHANNEL_NAME,
+                CHANNEL_ID,
             )
-            return None
-
-        try:
-            channel = await guild.create_text_channel(
-                CHANNEL_NAME,
-                reason="우만열차 좌석 현황판",
-            )
-            logger.info("%s 서버에 #%s 채널을 생성했습니다.", guild.name, CHANNEL_NAME)
-            return channel
-        except (discord.Forbidden, discord.HTTPException):
-            logger.exception("%s 채널 생성 실패", CHANNEL_NAME)
-            return None
+        return channel
 
     async def ensure_panel(self, guild):
-        channel = await self._find_or_create_channel(guild)
+        channel = await self._find_channel(guild)
         if channel is None:
             return False
 
         message = None
         location = self.repository.panel_location(guild.id)
-        if location is not None:
-            channel_id, message_id = location
-            known_channel = guild.get_channel(channel_id)
-            if known_channel is not None:
-                channel = known_channel
+        if location is not None and location[0] == channel.id:
+            _, message_id = location
             try:
                 message = await channel.fetch_message(message_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
