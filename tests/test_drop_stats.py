@@ -54,10 +54,43 @@ def test_existing_quantities_and_unclassified_runs_remain_visible():
             'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':3}]}
     for kind in ('stats','mine'):
         embed = build_embed(data,kind)
-        assert embed.fields[1].name == '마력석 · 어비스 전체 기준'
-        assert '59개' in embed.fields[1].value and '713판' in embed.fields[1].value
+        assert embed.fields[1].name == '마력석 · 던전별 기준'
+        value = embed.fields[1].value
+        table = value.split('```')[1]
+        assert '59개' in table and '3판' in table
+        assert '713판' not in table and '710판' not in table
+        assert '미분류 710판' in value
         assert '8.3%' in embed.fields[1].value
         assert embed.fields[-1].value == '713회'
+
+
+def test_classified_legacy_harbor_and_future_dungeons_use_separate_denominators():
+    data = {**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':83},
+                           {'mode':'abyss','item':'포식의 마력석','amount':1}],
+            'runs':[{'mode':'abyss','runs':881}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':861},
+                            {'mode':'abyss','dungeon':'광기의 동굴','runs':20}]}
+    for kind in ('stats','mine'):
+        embed = build_embed(data,kind)
+        rows = embed.fields[1].value.splitlines()
+        harbor = next(row for row in rows if row.startswith('허상'))
+        cave = next(row for row in rows if row.startswith('포식'))
+        sea = next(row for row in rows if row.startswith('심해'))
+        assert '861판' in harbor and '9.6%' in harbor
+        assert '20판' in cave and '5.0%' in cave
+        assert '0판' in sea and '—' in sea
+        assert '861판' not in cave and '861판' not in sea
+        assert '미분류' not in embed.fields[1].value
+        assert embed.fields[-1].value == '881회'
+
+
+def test_unclassified_only_counts_are_not_repeated_for_every_dungeon():
+    embed = build_embed({**DATA,'runs':[{'mode':'abyss','runs':857}]},'stats')
+    table = embed.fields[1].value.split('```')[1]
+    assert '857판' not in table
+    assert table.count('0판') == 3
+    assert embed.fields[1].value.count('857판') == 1
+    assert embed.fields[-1].value == '857회'
 
 
 def test_no_completion_never_divides_by_zero_or_invents_a_rate():
