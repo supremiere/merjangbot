@@ -110,6 +110,51 @@ def test_no_completion_never_divides_by_zero_or_invents_a_rate():
     assert '59개' in embed.fields[1].value and '—' in embed.fields[1].value
     assert '0.0%' not in embed.fields[1].value
 
+
+def test_real_soul_observation_is_visible_without_helper_reports_or_inferred_history():
+    data = {**DATA, 'day':'2026-10-10',
+            'items':[{'mode':'dungeon','item':'원념의 영혼석','amount':55}],
+            'runs':[{'mode':'dungeon','runs':0},{'mode':'abyss','runs':349}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':198}],
+            'observations':[{'mode':'dungeon','item':'원념의 영혼석','observed_runs':76,'hit_runs':9}]}
+    for kind in ('stats','mine'):
+        embed = build_embed(data,kind)
+        soul = embed.fields[0].value
+        row = next(row for row in soul.splitlines() if row.startswith('원념'))
+        assert '55개' in row and '관측 76판' in row and '11.8%' in row
+        assert '72.4%' not in row  # Bag increases are not 55 successful observed runs.
+        assert '미분류' not in soul
+        assert '미분류 151판' in embed.fields[1].value
+        assert embed.fields[-1].value == '349회'
+        assert all(len(field.value) <= 1024 for field in embed.fields)
+        assert '76판' in embed.fields[-2].value
+
+
+def test_observations_never_add_to_known_helper_denominator_or_unknown_runs():
+    data = {**DATA,
+            'items':[{'mode':'dungeon','item':'공명의 영혼석','amount':4}],
+            'runs':[{'mode':'dungeon','runs':12}],
+            'dungeon_runs':[{'mode':'dungeon','dungeon':'룬다 던전 1층','runs':10}],
+            'observations':[{'mode':'dungeon','item':'공명의 영혼석','observed_runs':10,'hit_runs':3}]}
+    value = build_embed(data,'stats').fields[0].value
+    row = next(row for row in value.splitlines() if row.startswith('공명'))
+    assert '10판' in row and '40.0%' in row
+    assert '20판' not in row and '관측 10판' in row
+    assert '40.0% / 30.0%' in row
+    assert '미분류 2판' in value
+
+
+def test_observation_zero_drop_and_multiple_quantity_use_observed_hits():
+    data = {**DATA,
+            'items':[{'mode':'dungeon','item':'공명의 영혼석','amount':6}],
+            'observations':[{'mode':'dungeon','item':'공명의 영혼석','observed_runs':10,'hit_runs':2},
+                            {'mode':'dungeon','item':'삼림의 영혼석','observed_runs':7,'hit_runs':0}]}
+    value = build_embed(data,'mine').fields[0].value
+    runda = next(row for row in value.splitlines() if row.startswith('공명'))
+    forest = next(row for row in value.splitlines() if row.startswith('삼림'))
+    assert '관측 10판' in runda and '20.0%' in runda
+    assert '관측 7판' in forest and '0.0%' in forest
+
 def test_stats_are_restricted_to_guild_and_personal_identity():
     async def scenario():
         bot = SimpleNamespace(settings=SimpleNamespace(drop_stats_guild_id=222),

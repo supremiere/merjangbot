@@ -34,25 +34,46 @@ def build_embed(data,kind):
                     for i,row in enumerate(leaders[:5],1)]
             embed.add_field(name=label,value='\n'.join(rows) or '아직 기록이 없습니다.',inline=False)
     else:
-        embed.description += ' · 획득 개수 ÷ 완료 판수'
+        embed.description += ' · 던전별 완료 기록'
+        observed_total = 0
         for mode,label in [('dungeon','영혼석'),('abyss','마력석')]:
             amounts = {row['item']: int(row['amount']) for row in data.get('items',[]) if row['mode']==mode}
             total = sum(int(row['runs']) for row in data.get('runs',[]) if row['mode']==mode)
             by_dungeon = {row['dungeon']: int(row['runs']) for row in data.get('dungeon_runs',[]) if row['mode']==mode}
+            observations = {row['item']: row for row in data.get('observations',[]) if row['mode']==mode}
+            observed_total += sum(int(row.get('observed_runs',0)) for item,row in observations.items() if item in CATALOG[mode])
             # Unclassified history is a separate total, never every dungeon's denominator.
             unclassified = max(0,total - sum(by_dungeon.values()))
             rows = []
+            used_observations = False
             for item,dungeon in CATALOG[mode].items():
                 runs = by_dungeon.get(dungeon,0)
                 amount = amounts.get(item,0)
+                completion = f'{runs:,}판'
+                observation = observations.get(item,{})
+                observed = int(observation.get('observed_runs',0))
                 rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
+                if observed > 0:
+                    # These are separately recorded AI clears, not missing
+                    # helper reports. Never add them to helper/unknown totals.
+                    observed_completion = f'관측 {observed:,}판'
+                    observed_rate = f"{int(observation.get('hit_runs',0)) / observed * 100:.1f}%"
+                    completion = f'{completion} / {observed_completion}' if runs > 0 else observed_completion
+                    rate = f'{rate} / {observed_rate}' if runs > 0 else observed_rate
+                    used_observations = True
                 short = item.replace('의 영혼석','').replace('의 마력석','')
-                rows.append((short,f'{amount:,}개',f'{runs:,}판',rate))
+                rows.append((short,f'{amount:,}개',completion,rate))
             value = compact_table(rows)
+            value += '\n햄순이 획득률: 획득 개수 ÷ 해당 던전 완료'
+            if used_observations:
+                value += '\n관측: AI가 확인한 완료 · 관측 획득률: 획득한 판 ÷ 관측 판수'
+                value += '\n두 값이 있으면 햄순이 / 관측 순서 · 서로 합산하지 않음'
             if unclassified:
                 amount = sum(amounts.get(item,0) for item in CATALOG[mode])
                 value += f'\n미분류 {unclassified:,}판 · 전체 {amount / total * 100:.1f}%'
             embed.add_field(name=f'{label} · 던전별 기준',value=value,inline=False)
+        if observed_total:
+            embed.add_field(name='AI로 관측한 완료',value=f'{observed_total:,}판 · 햄순이 완료와 별도 기록',inline=False)
         runs = sum(int(row['runs']) for row in data.get('runs',[]))
         embed.add_field(name='햄순이로 완료한 횟수',value=f'{runs:,}회',inline=False)
     embed.set_footer(text=FOOTER)
