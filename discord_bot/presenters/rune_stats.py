@@ -82,6 +82,7 @@ def build_rune_stats_embed(data):
         ("용문장", "🐉"),
         ("침식", "🌫️"),
         ("그 외", "🛡️"),
+        ("신화", "✨"),
     ):
         pairs = defense.get(label) or []
         if pairs:
