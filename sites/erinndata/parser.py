@@ -67,6 +67,9 @@ def _extract_data_date(page_text):
         match = re.search(pattern, page_text)
         if match:
             return match.group(1).replace(".", "-")
+    match = re.search(r"채용률\s*(\d{2}\.\d{2})", page_text)
+    if match:
+        return match.group(1)
     return ""
 
 
@@ -359,6 +362,67 @@ def _parse_operation_table(heading):
     return []
 
 
+def _card_text(card, selector):
+    node = card.select_one(selector)
+    return _clean(node.get_text(" ", strip=True)) if node else ""
+
+
+def _bar_pair(bar):
+    name = _card_text(bar, "b")
+    rate = _card_text(bar, "em")
+    if not name or not re.fullmatch(r"\d+(?:\.\d+)?%", rate):
+        return None
+    if not 0 <= float(rate[:-1]) <= 100:
+        return None
+    return {"name": name, "rate": rate}
+
+
+def _parse_card(card):
+    """Read detailed adoption bars, excluding the duplicated summary chips."""
+    accessory = {"80": [], "40": [], "10": []}
+    defense = {label: [] for label in ("각성", "용문장", "침식", "그 외", "신화")}
+    weapon, emblem = [], []
+    for section in card.select(".bg[data-part]"):
+        part = section["data-part"]
+        current = "그 외"
+        for node in section.select(".bst, .bar"):
+            if "bst" in node.get("class", []):
+                label = _clean(node.get_text(" ", strip=True))
+                current = next((key for key in defense if label.startswith(key)), None)
+                continue
+            pair = _bar_pair(node)
+            if pair is None:
+                continue
+            if part == "장신구":
+                rate = float(pair["rate"][:-1])
+                key = "80" if rate >= 80 else "40" if rate >= 40 else "10" if rate >= 10 else None
+                if key:
+                    accessory[key].append(pair)
+            elif part == "방어구" and current:
+                defense[current].append(pair)
+            elif part == "무기":
+                weapon.append(pair)
+            elif part == "엠블럼":
+                emblem.append(pair)
+    combos = []
+    for row in card.select(".sts .st"):
+        combo = _card_text(row, ".st-h b")
+        if combo:
+            combos.append({
+                "combo": combo,
+                "upgrade": row.get("data-mod") or re.sub(r"^개조\s*", "", _card_text(row, ".mod")),
+                "engraving": re.sub(r"^세공\s*", "", _card_text(row, ".st-s")),
+                "note": _card_text(row, ".st-u"),
+            })
+    operations = []
+    for row in card.select(".cbs .cb"):
+        combo = _card_text(row, ".cc")
+        if combo:
+            operations.append({"situation": _card_text(row, ".cw") or "기본",
+                               "combo": combo, "note": _card_text(row, ".cm")})
+    return accessory, defense, weapon[:3], emblem[:3], combos[:5], operations
+
+
 def parse_page(html: str) -> dict[str, RuneStats]:
     soup = BeautifulSoup(html, "html.parser")
     page_text = soup.get_text(" ", strip=True)
@@ -380,6 +444,10 @@ def parse_page(html: str) -> dict[str, RuneStats]:
             ("실전 세팅", "장신구 조합", "콤보 · 운용 제보", "제보의 영역"),
         )
         combos = _parse_combo_table(heading)
+        operations = _parse_operation_table(heading)
+        card = heading.find_parent("article", class_="job")
+        if card is not None and card.select_one(".bg[data-part]"):
+            accessory, defense, weapon, emblem, combos, operations = _parse_card(card)
 
         parsed[class_name] = {
             "class_name": class_name,
@@ -388,7 +456,7 @@ def parse_page(html: str) -> dict[str, RuneStats]:
             "weapon": weapon,
             "emblem": emblem,
             "combos": combos,
-            "operations": _parse_operation_table(heading),
+            "operations": operations,
             "basic_ratio": None,
             "data_date": data_date,
         }
