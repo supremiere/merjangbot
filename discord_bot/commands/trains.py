@@ -7,7 +7,15 @@ from datetime import datetime, timedelta, timezone
 import discord
 from discord import app_commands
 
-from storage.trains import TRAIN_CAPACITY, TrainRepository, TrainStateError
+from storage.trains import (
+    DEFAULT_TRAIN_TYPE,
+    TRAIN_CAPACITY,
+    TRAIN_TYPES,
+    TrainRepository,
+    TrainStateError,
+    train_title,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +27,10 @@ LEGACY_PANEL_TITLES = ("🚆 **우만열차 좌석도**",)
 TRAIN_ADMIN_ROLES = {"자발적 봉사자", "봉사하는 노예", "머장", "관리자"}
 NO_MENTIONS = discord.AllowedMentions.none()
 KST = timezone(timedelta(hours=9))
+
+
+def train_capacity(state):
+    return state.get("capacity", TRAIN_CAPACITY)
 
 
 def parse_train_end_time(value, *, now=None):
@@ -193,8 +205,8 @@ class TrainController:
             conductor_id = state["conductor_id"]
             passengers = state["passenger_ids"]
             count = 1 + len(passengers)
-            icon = "🔴" if count >= TRAIN_CAPACITY else "🟢"
-            status = "만석" if count >= TRAIN_CAPACITY else "운행중"
+            icon = "🔴" if count >= train_capacity(state) else "🟢"
+            status = "만석" if count >= train_capacity(state) else "운행중"
             conductor_name = await self.display_name(guild, conductor_id)
             passenger_names = [
                 await self.display_name(guild, user_id)
@@ -204,8 +216,8 @@ class TrainController:
 
             ends_at = state.get("ends_at")
             car_lines = [
-                f"┏━━━━━━ 🚃 {car_no}호차 ━━━━━━┓",
-                f"┃  {icon} {status}  ·  `{count} / {TRAIN_CAPACITY}`",
+                f"┏━━ 🚃 {car_no}호차 · {train_title(state)} ━━┓",
+                f"┃  {icon} {status}  ·  `{count} / {train_capacity(state)}`",
             ]
             if ends_at is not None:
                 car_lines.append(
@@ -333,7 +345,8 @@ class TrainController:
             return False
 
         try:
-            content = f"🚆 {car_no}호차가 플랫폼에 도착했습니다. 서둘러 탑승해주세요!"
+            state = self.repository.snapshot(guild.id).get(car_no, {})
+            content = f"🚆 {car_no}호차 · {train_title(state)}가 플랫폼에 도착했습니다. 서둘러 탑승해주세요!"
             if ends_at is not None:
                 content += (
                     f"\n⏰ 운행 종료 예정: {format_train_end_time(ends_at)}"
@@ -366,6 +379,12 @@ class TrainController:
             return f"{error.car_no}호차는 이미 운행 중입니다."
         if error.code == "car_inactive":
             return f"{error.car_no}호차는 현재 운행 중이 아닙니다."
+        if error.code == "invalid_train_type":
+            return "열차 종류는 허상·포식·물길 중에서 선택해주세요."
+        if error.code == "invalid_capacity":
+            return "정원은 기장을 포함해 3인 또는 4인으로 선택해주세요."
+        if error.code == "capacity_below_occupancy":
+            return "현재 탑승 인원이 정원보다 많습니다. 승객이 하차한 뒤 정원을 줄여주세요."
         if error.code == "full":
             return f"{error.car_no}호차는 이미 만석입니다."
         if error.code == "duplicate_participants":
@@ -458,12 +477,12 @@ class TrainBoardSelect(discord.ui.Select):
             if state["conductor_id"] is None:
                 continue
             count = 1 + len(state["passenger_ids"])
-            if count >= TRAIN_CAPACITY:
+            if count >= train_capacity(state):
                 continue
             options.append(
                 discord.SelectOption(
-                    label=f"{car_no}호차",
-                    description=f"현재 {count}/{TRAIN_CAPACITY}명 탑승",
+                    label=f"{car_no}호차 · {train_title(state)}",
+                    description=f"현재 {count}/{train_capacity(state)}명 탑승",
                     value=str(car_no),
                     emoji="🚆",
                 )
@@ -581,8 +600,8 @@ async def build_passenger_manage_view(controller, guild, requester_id, car_no):
         else "미설정"
     )
     content = (
-        f"⚙️ **{int(car_no)}호차 열차 관리**\n"
-        f"👥 현재 좌석: {count}/{TRAIN_CAPACITY}\n"
+        f"⚙️ **{int(car_no)}호차 · {train_title(state)} 관리**\n"
+        f"👥 현재 좌석: {count}/{train_capacity(state)}\n"
         f"💺 승객: {', '.join(passenger_names) if passenger_names else '-'}\n"
         f"⏰ 종료 예정: {end_text}\n"
         "💡 검색에 안 뜨는 오프라인 승객은 ID/멘션으로 추가를 사용하세요."
@@ -594,7 +613,7 @@ async def build_passenger_manage_view(controller, guild, requester_id, car_no):
             requester_id,
             car_no,
             passenger_options,
-            can_add=count < TRAIN_CAPACITY,
+            can_add=count < train_capacity(state),
         ),
     )
 
@@ -1051,6 +1070,10 @@ class TrainPassengerManageView(discord.ui.View):
         )
         return False
 
+    @discord.ui.button(label="종류·정원 변경", emoji="🚆", style=discord.ButtonStyle.secondary, row=2)
+    async def change_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await open_train_settings(self.controller, interaction, self.car_no, admin=False)
+
     @discord.ui.button(
         label="ID/멘션으로 추가",
         emoji="🔎",
@@ -1080,7 +1103,7 @@ class TrainPassengerManageView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        if 1 + len(state["passenger_ids"]) >= TRAIN_CAPACITY:
+        if 1 + len(state["passenger_ids"]) >= train_capacity(state):
             await interaction.response.send_message(
                 f"{self.car_no}호차는 이미 만석입니다.",
                 ephemeral=True,
@@ -1191,10 +1214,10 @@ async def build_admin_train_view(controller, guild, requester_id, car_no):
         else "미설정"
     )
     content = (
-        f"🛠️ **관리자 모드 · {int(car_no)}호차**\n"
+        f"🛠️ **관리자 모드 · {int(car_no)}호차 · {train_title(state)}**\n"
         f"👨‍✈️ 기장: {conductor_name}\n"
         f"💺 승객: {', '.join(passenger_names) if passenger_names else '-'}\n"
-        f"👥 좌석: {count}/{TRAIN_CAPACITY}\n"
+        f"👥 좌석: {count}/{train_capacity(state)}\n"
         f"⏰ 종료 예정: {end_text}\n\n"
         "아래 메뉴에서 기장·승객·운행시간·열차 종료를 직접 편집할 수 있습니다.\n"
         "검색에 안 뜨는 오프라인 승객은 ID/멘션으로 추가를 사용하세요."
@@ -1206,7 +1229,7 @@ async def build_admin_train_view(controller, guild, requester_id, car_no):
             requester_id,
             car_no,
             passenger_options,
-            can_add=count < TRAIN_CAPACITY,
+            can_add=count < train_capacity(state),
         ),
     )
 
@@ -1221,9 +1244,9 @@ class TrainAdminCarSelect(discord.ui.Select):
             count = 1 + len(state["passenger_ids"])
             options.append(
                 discord.SelectOption(
-                    label=f"{car_no}호차",
+                    label=f"{car_no}호차 · {train_title(state)}",
                     value=str(car_no),
-                    description=f"현재 {count}/{TRAIN_CAPACITY}명 탑승",
+                    description=f"현재 {count}/{train_capacity(state)}명 탑승",
                     emoji="🚆",
                 )
             )
@@ -1258,6 +1281,7 @@ class TrainAdminCreateConductorSelect(discord.ui.UserSelect):
             min_values=1,
             max_values=1,
             custom_id="train:admin:create-conductor",
+            row=2,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -1279,6 +1303,8 @@ class TrainAdminCreateConductorSelect(discord.ui.UserSelect):
                     interaction.guild.id,
                     car_no,
                     target.id,
+                    train_type=self.view.train_type,
+                    capacity=self.view.capacity,
                 )
             panel_ok = await self.controller.ensure_panel(interaction.guild)
             content, view = await build_admin_train_view(
@@ -1319,6 +1345,10 @@ class TrainAdminCreateView(discord.ui.View):
         super().__init__(timeout=180)
         self.controller = controller
         self.requester_id = int(requester_id)
+        self.train_type = DEFAULT_TRAIN_TYPE
+        self.capacity = TRAIN_CAPACITY
+        self.add_item(TrainProfileSelect(self, "train_type", row=0))
+        self.add_item(TrainProfileSelect(self, "capacity", row=1))
         self.add_item(
             TrainAdminCreateConductorSelect(controller, requester_id)
         )
@@ -1342,7 +1372,7 @@ class TrainAdminCreateView(discord.ui.View):
         label="열차 목록",
         emoji="↩️",
         style=discord.ButtonStyle.secondary,
-        row=1,
+        row=3,
         custom_id="train:admin:create-back",
     )
     async def back_to_list(
@@ -1398,7 +1428,7 @@ class TrainAdminPickerView(discord.ui.View):
         await interaction.response.edit_message(
             content=(
                 "➕ **새 열차 추가**\n"
-                "새 열차의 기장을 선택하세요. "
+                "종류와 정원(기장 포함)을 선택한 뒤 새 열차의 기장을 선택하세요. "
                 "운행 종료 시각은 생성 후 관리자 메뉴에서 설정할 수 있습니다."
             ),
             view=TrainAdminCreateView(
@@ -1721,6 +1751,10 @@ class TrainAdminManageView(discord.ui.View):
             return False
         return True
 
+    @discord.ui.button(label="종류·정원 변경", emoji="🚆", style=discord.ButtonStyle.secondary, row=3)
+    async def change_profile(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await open_train_settings(self.controller, interaction, self.car_no, admin=True)
+
     @discord.ui.button(
         label="ID/멘션으로 추가",
         emoji="🔎",
@@ -1753,7 +1787,7 @@ class TrainAdminManageView(discord.ui.View):
                 ephemeral=True,
             )
             return
-        if 1 + len(state["passenger_ids"]) >= TRAIN_CAPACITY:
+        if 1 + len(state["passenger_ids"]) >= train_capacity(state):
             await interaction.response.send_message(
                 f"{self.car_no}호차는 이미 만석입니다.",
                 ephemeral=True,
@@ -1847,11 +1881,111 @@ class TrainAdminManageView(discord.ui.View):
         )
 
 
+class TrainProfileSelect(discord.ui.Select):
+    def __init__(self, owner, field, *, row):
+        self.field = field
+        choices = TRAIN_TYPES if field == "train_type" else {3: "3인 (기장 포함)", 4: "4인 (기장 포함)"}
+        super().__init__(
+            placeholder="열차 종류" if field == "train_type" else "정원 (기장 포함)",
+            options=[discord.SelectOption(
+                label=f"{label} 열차" if field == "train_type" else label,
+                value=str(value), default=value == getattr(owner, field),
+            ) for value, label in choices.items()],
+            row=row,
+        )
+
+    async def callback(self, interaction):
+        value = self.values[0]
+        setattr(self.view, self.field, int(value) if self.field == "capacity" else value)
+        for option in self.options:
+            option.default = option.value == value
+        await interaction.response.edit_message(view=self.view)
+
+
+class TrainSettingsView(discord.ui.View):
+    def __init__(self, controller, requester_id, *, car_no=None, admin=False, state=None):
+        super().__init__(timeout=180)
+        self.controller = controller
+        self.requester_id = int(requester_id)
+        self.car_no = car_no
+        self.admin = admin
+        state = state or {}
+        self.train_type = state.get("train_type", DEFAULT_TRAIN_TYPE)
+        self.capacity = train_capacity(state)
+        self.add_item(TrainProfileSelect(self, "train_type", row=0))
+        self.add_item(TrainProfileSelect(self, "capacity", row=1))
+        self.save.label = "변경 저장" if car_no is not None else "다음: 종료 시각"
+
+    async def interaction_check(self, interaction):
+        if interaction.guild is None or interaction.user.id != self.requester_id:
+            await interaction.response.send_message("요청한 본인만 사용할 수 있습니다.", ephemeral=True)
+            return False
+        if self.admin and not can_manage_trains(interaction.user):
+            await interaction.response.send_message("열차 관리 권한이 없습니다.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="변경 저장", style=discord.ButtonStyle.primary, row=2)
+    async def save(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self.interaction_check(interaction):
+            return
+        if self.car_no is None:
+            await interaction.response.send_modal(TrainEndTimeModal(
+                self.controller, train_type=self.train_type, capacity=self.capacity,
+            ))
+            self.stop()
+            return
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with self.controller.lock_for(interaction.guild.id):
+                self.controller.repository.set_profile(
+                    interaction.guild.id, self.car_no, interaction.user.id,
+                    self.train_type, self.capacity, force=self.admin,
+                )
+            panel_ok = await self.controller.ensure_panel(interaction.guild)
+            builder = build_admin_train_view if self.admin else build_passenger_manage_view
+            content, view = await builder(
+                self.controller, interaction.guild, interaction.user.id, self.car_no,
+            )
+            await interaction.edit_original_response(
+                content="✅ 종류와 정원을 변경했습니다.\n" + content + self.controller.panel_suffix(panel_ok),
+                view=view,
+            )
+            self.stop()
+        except TrainStateError as error:
+            await interaction.edit_original_response(
+                content=await self.controller.error_text(interaction.guild, error, interaction.user.id),
+                view=self,
+            )
+        except Exception:
+            logger.exception("열차 종류·정원 변경 오류")
+            await interaction.edit_original_response(content="변경 중 오류가 발생했습니다. 다시 시도해주세요.", view=self)
+
+
+async def open_train_settings(controller, interaction, car_no, *, admin=False):
+    if interaction.guild is None:
+        await interaction.response.send_message("서버 안에서 사용해주세요.", ephemeral=True)
+        return
+    state = controller.repository.snapshot(interaction.guild.id).get(car_no)
+    if (state is None or state["conductor_id"] is None
+            or (not admin and state["conductor_id"] != interaction.user.id)
+            or (admin and not can_manage_trains(interaction.user))):
+        await interaction.response.send_message("현재 이 열차를 수정할 권한이 없습니다.", ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"🚆 **{car_no}호차 · {train_title(state)} 수정**\n종류와 정원(기장 포함)을 선택한 뒤 저장해주세요.",
+        view=TrainSettingsView(controller, interaction.user.id, car_no=car_no, admin=admin, state=state),
+        ephemeral=True,
+    )
+
+
 class TrainEndTimeModal(discord.ui.Modal):
     """새 열차 생성 시 기장이 운행 종료 시각을 직접 입력합니다."""
 
-    def __init__(self, controller):
+    def __init__(self, controller, *, train_type=DEFAULT_TRAIN_TYPE, capacity=TRAIN_CAPACITY):
         super().__init__(title="새 열차 만들기", timeout=180)
+        self.train_type = train_type
+        self.capacity = capacity
         self.controller = controller
         self.end_time = discord.ui.TextInput(
             label="운행 종료 시각",
@@ -1901,6 +2035,8 @@ class TrainEndTimeModal(discord.ui.Modal):
                     car_no,
                     interaction.user.id,
                     ends_at=ends_at,
+                    train_type=self.train_type,
+                    capacity=self.capacity,
                 )
 
             panel_ok = await self.controller.ensure_panel(interaction.guild)
@@ -1911,7 +2047,7 @@ class TrainEndTimeModal(discord.ui.Modal):
             )
             await interaction.edit_original_response(
                 content=(
-                    f"🚆 {car_no}호차를 만들었습니다. 기장으로 등록했습니다.\n"
+                    f"🚆 {car_no}호차 · {train_title(dict(train_type=self.train_type, capacity=self.capacity))}를 만들었습니다. 기장으로 등록했습니다.\n"
                     f"⏰ 운행 종료 예정: {format_train_end_time(ends_at)}"
                     f" · <t:{ends_at}:R>"
                     + self.controller.panel_suffix(panel_ok)
@@ -1998,8 +2134,10 @@ class TrainPanelView(discord.ui.View):
             )
             return
 
-        await interaction.response.send_modal(
-            TrainEndTimeModal(self.controller)
+        view = TrainSettingsView(self.controller, interaction.user.id)
+        await interaction.response.send_message(
+            "🚆 **새 열차 만들기**\n종류와 정원(기장 포함)을 선택한 뒤 `다음: 종료 시각`을 눌러주세요.",
+            view=view, ephemeral=True,
         )
 
     @discord.ui.button(
@@ -2048,7 +2186,7 @@ class TrainPanelView(discord.ui.View):
             car_no: state
             for car_no, state in snapshot.items()
             if state["conductor_id"] is not None
-            and 1 + len(state["passenger_ids"]) < TRAIN_CAPACITY
+            and 1 + len(state["passenger_ids"]) < train_capacity(state)
         }
         if not available:
             await interaction.response.send_message(
@@ -2263,6 +2401,13 @@ def register(bot):
         기장="해당 열차의 기장",
         승객1="첫 번째 승객 (선택)",
         승객2="두 번째 승객 (선택)",
+        승객3="세 번째 승객 (4인 열차)",
+        종류="허상·포식·물길 열차 (생략하면 현재 설정 유지)",
+        정원="기장 포함 3인 또는 4인 (생략하면 현재 설정 유지)",
+    )
+    @app_commands.choices(
+        종류=[app_commands.Choice(name=name + " 열차", value=key) for key, name in TRAIN_TYPES.items()],
+        정원=[app_commands.Choice(name=f"{n}인", value=n) for n in (3, 4)],
     )
     async def train_set_composition(
         interaction: discord.Interaction,
@@ -2270,6 +2415,9 @@ def register(bot):
         기장: discord.Member,
         승객1: discord.Member | None = None,
         승객2: discord.Member | None = None,
+        승객3: discord.Member | None = None,
+        종류: str | None = None,
+        정원: int | None = None,
     ):
         if interaction.guild is None or not isinstance(interaction.user, discord.Member):
             await interaction.response.send_message(
@@ -2283,7 +2431,7 @@ def register(bot):
             return
 
         await interaction.response.defer(ephemeral=True, thinking=True)
-        passengers = [member for member in (승객1, 승객2) if member is not None]
+        passengers = [member for member in (승객1, 승객2, 승객3) if member is not None]
         try:
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.set_composition(
@@ -2291,6 +2439,8 @@ def register(bot):
                     호차,
                     기장.id,
                     [member.id for member in passengers],
+                    train_type=종류,
+                    capacity=정원,
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             names = [discord.utils.escape_markdown(기장.display_name)]
@@ -2328,12 +2478,22 @@ def register(bot):
         호차="출발시킬 열차 번호 (1 이상)",
         승객1="같이 출발할 승객 (선택)",
         승객2="같이 출발할 승객 (선택)",
+        승객3="같이 출발할 세 번째 승객 (4인 열차)",
+        종류="허상·포식·물길 열차",
+        정원="기장 포함 3인 또는 4인",
+    )
+    @app_commands.choices(
+        종류=[app_commands.Choice(name=name + " 열차", value=key) for key, name in TRAIN_TYPES.items()],
+        정원=[app_commands.Choice(name=f"{n}인", value=n) for n in (3, 4)],
     )
     async def train_start(
         interaction: discord.Interaction,
         호차: int,
         승객1: discord.Member | None = None,
         승객2: discord.Member | None = None,
+        승객3: discord.Member | None = None,
+        종류: str = DEFAULT_TRAIN_TYPE,
+        정원: int = TRAIN_CAPACITY,
     ):
         if interaction.guild is None:
             await interaction.response.send_message(
@@ -2342,7 +2502,7 @@ def register(bot):
             return
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        passengers = [member for member in (승객1, 승객2) if member is not None]
+        passengers = [member for member in (승객1, 승객2, 승객3) if member is not None]
         try:
             async with controller.lock_for(interaction.guild.id):
                 controller.repository.start(
@@ -2350,6 +2510,8 @@ def register(bot):
                     호차,
                     interaction.user.id,
                     [member.id for member in passengers],
+                    train_type=종류,
+                    capacity=정원,
                 )
             panel_ok = await controller.ensure_panel(interaction.guild)
             await controller.announce_train_arrival(interaction.guild, 호차)
