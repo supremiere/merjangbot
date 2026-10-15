@@ -3,6 +3,14 @@ from dataclasses import dataclass
 
 
 TRAIN_CAPACITY = 3
+TRAIN_TYPES = {"illusion": "허상", "predation": "포식", "waterway": "물길"}
+DEFAULT_TRAIN_TYPE = "illusion"
+
+
+def train_title(state):
+    name = TRAIN_TYPES[state.get("train_type", DEFAULT_TRAIN_TYPE)]
+    capacity = state.get("capacity", TRAIN_CAPACITY)
+    return f"{name}열차 ({capacity}인)"
 
 
 class TrainStateError(ValueError):
@@ -32,6 +40,31 @@ class TrainRepository:
             raise TrainStateError("invalid_car", car_no=car_no)
         return car_no
 
+    @staticmethod
+    def _check_profile(train_type, capacity):
+        if train_type not in TRAIN_TYPES:
+            raise TrainStateError("invalid_train_type")
+        if capacity not in (3, 4):
+            raise TrainStateError("invalid_capacity")
+        return train_type, int(capacity)
+
+    @staticmethod
+    def _profile(conn, guild_id, car_no):
+        row = conn.execute(
+            "SELECT train_type, capacity FROM train_profiles WHERE guild_id = ? AND car_no = ?",
+            (int(guild_id), int(car_no)),
+        ).fetchone()
+        return (str(row[0]), int(row[1])) if row else (DEFAULT_TRAIN_TYPE, TRAIN_CAPACITY)
+
+    @staticmethod
+    def _save_profile(conn, guild_id, car_no, train_type, capacity):
+        conn.execute(
+            """INSERT INTO train_profiles (guild_id, car_no, train_type, capacity)
+               VALUES (?, ?, ?, ?) ON CONFLICT(guild_id, car_no) DO UPDATE SET
+               train_type = excluded.train_type, capacity = excluded.capacity""",
+            (int(guild_id), int(car_no), train_type, capacity),
+        )
+
     def snapshot(self, guild_id):
         result = {}
         with self.db.connect() as conn:
@@ -57,6 +90,13 @@ class TrainRepository:
                     (int(guild_id),),
                 ).fetchall()
             }
+            profiles = {
+                int(car): (kind, int(capacity))
+                for car, kind, capacity in conn.execute(
+                    "SELECT car_no, train_type, capacity FROM train_profiles WHERE guild_id = ?",
+                    (int(guild_id),),
+                )
+            }
         for car_no, user_id, role in rows:
             car_no = int(car_no)
             state = result.setdefault(
@@ -65,6 +105,8 @@ class TrainRepository:
                     "conductor_id": None,
                     "passenger_ids": [],
                     "ends_at": schedules.get(car_no),
+                    "train_type": profiles.get(car_no, (DEFAULT_TRAIN_TYPE, TRAIN_CAPACITY))[0],
+                    "capacity": profiles.get(car_no, (DEFAULT_TRAIN_TYPE, TRAIN_CAPACITY))[1],
                 },
             )
             if role == "conductor":
@@ -102,15 +144,19 @@ class TrainRepository:
         passenger_ids=(),
         *,
         ends_at=None,
+        train_type=DEFAULT_TRAIN_TYPE,
+        capacity=TRAIN_CAPACITY,
     ):
         car_no = self._check_car(car_no)
+        train_type, capacity = self._check_profile(train_type, capacity)
         participants = [int(conductor_id), *(int(value) for value in passenger_ids)]
-        if len(participants) > TRAIN_CAPACITY:
+        if len(participants) > capacity:
             raise TrainStateError("full", car_no=car_no)
         if len(set(participants)) != len(participants):
             raise TrainStateError("duplicate_participants", car_no=car_no)
 
         with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             active = conn.execute(
                 "SELECT 1 FROM train_members WHERE guild_id = ? AND car_no = ? LIMIT 1",
                 (int(guild_id), car_no),
@@ -134,6 +180,7 @@ class TrainRepository:
                         existing_car=int(row[0]),
                     )
 
+            self._save_profile(conn, guild_id, car_no, train_type, capacity)
             conn.execute(
                 """
                 INSERT INTO train_members (guild_id, car_no, user_id, role)
@@ -165,18 +212,24 @@ class TrainRepository:
                     (int(guild_id), car_no, int(ends_at)),
                 )
 
-    def set_composition(self, guild_id, car_no, conductor_id, passenger_ids=()):
+    def set_composition(self, guild_id, car_no, conductor_id, passenger_ids=(), *, train_type=None, capacity=None):
         """관리자가 실제 운행 중인 파티 구성을 좌석도에 그대로 맞춥니다."""
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
         participants = [int(conductor_id), *(int(value) for value in passenger_ids)]
 
-        if len(participants) > TRAIN_CAPACITY:
-            raise TrainStateError("full", car_no=car_no)
         if len(set(participants)) != len(participants):
             raise TrainStateError("duplicate_participants", car_no=car_no)
 
         with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            old_type, old_capacity = self._profile(conn, guild_id, car_no)
+            train_type, capacity = self._check_profile(
+                old_type if train_type is None else train_type,
+                old_capacity if capacity is None else capacity,
+            )
+            if len(participants) > capacity:
+                raise TrainStateError("full", car_no=car_no)
             # 같은 호차의 기존 구성은 통째로 교체할 수 있지만, 다른 호차에
             # 이미 등록된 사람까지 조용히 빼앗지는 않는다.
             for user_id in participants:
@@ -199,6 +252,7 @@ class TrainRepository:
                 "DELETE FROM train_members WHERE guild_id = ? AND car_no = ?",
                 (guild_id, car_no),
             )
+            self._save_profile(conn, guild_id, car_no, train_type, capacity)
             conn.execute(
                 """
                 INSERT INTO train_members (guild_id, car_no, user_id, role)
@@ -214,6 +268,27 @@ class TrainRepository:
                     """,
                     (guild_id, car_no, int(user_id)),
                 )
+
+    def set_profile(self, guild_id, car_no, requester_id, train_type, capacity, *, force=False):
+        car_no = self._check_car(car_no)
+        train_type, capacity = self._check_profile(train_type, capacity)
+        with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conductor = conn.execute(
+                "SELECT user_id FROM train_members WHERE guild_id = ? AND car_no = ? AND role = 'conductor'",
+                (int(guild_id), car_no),
+            ).fetchone()
+            if conductor is None:
+                raise TrainStateError("car_inactive", car_no=car_no)
+            if not force and int(conductor[0]) != int(requester_id):
+                raise TrainStateError("not_conductor", car_no=car_no)
+            count = conn.execute(
+                "SELECT COUNT(*) FROM train_members WHERE guild_id = ? AND car_no = ?",
+                (int(guild_id), car_no),
+            ).fetchone()[0]
+            if count > capacity:
+                raise TrainStateError("capacity_below_occupancy", car_no=car_no)
+            self._save_profile(conn, guild_id, car_no, train_type, capacity)
 
     def set_conductor(self, guild_id, car_no, user_id):
         """관리자가 운행 중인 열차의 기장을 교체하고 기존 승객은 유지합니다."""
@@ -309,6 +384,7 @@ class TrainRepository:
         user_id = int(user_id)
 
         with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             existing = conn.execute(
                 """
                 SELECT car_no
@@ -343,7 +419,7 @@ class TrainRepository:
                 """,
                 (guild_id, car_no),
             ).fetchone()[0]
-            if int(count) >= TRAIN_CAPACITY:
+            if int(count) >= self._profile(conn, guild_id, car_no)[1]:
                 raise TrainStateError("full", car_no=car_no)
 
             conn.execute(
@@ -361,6 +437,7 @@ class TrainRepository:
         user_id = int(user_id)
 
         with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             conductor = conn.execute(
                 """
                 SELECT user_id
@@ -397,7 +474,7 @@ class TrainRepository:
                 """,
                 (guild_id, car_no),
             ).fetchone()[0]
-            if int(count) >= TRAIN_CAPACITY:
+            if int(count) >= self._profile(conn, guild_id, car_no)[1]:
                 raise TrainStateError("full", car_no=car_no)
 
             conn.execute(
@@ -496,6 +573,10 @@ class TrainRepository:
             )
             conn.execute(
                 "DELETE FROM train_schedules WHERE guild_id = ? AND car_no = ?",
+                (guild_id, car_no),
+            )
+            conn.execute(
+                "DELETE FROM train_profiles WHERE guild_id = ? AND car_no = ?",
                 (guild_id, car_no),
             )
 

@@ -71,13 +71,39 @@ class Database:
                 ON train_members (guild_id, car_no)
                 WHERE role = 'conductor';
 
-            CREATE TRIGGER IF NOT EXISTS trg_train_capacity
+            CREATE TABLE IF NOT EXISTS train_profiles (
+                guild_id INTEGER NOT NULL,
+                car_no INTEGER NOT NULL CHECK (car_no > 0),
+                train_type TEXT NOT NULL CHECK (train_type IN ('illusion', 'predation', 'waterway')),
+                capacity INTEGER NOT NULL CHECK (capacity IN (3, 4)),
+                PRIMARY KEY (guild_id, car_no)
+            );
+
+            DROP TRIGGER IF EXISTS trg_train_capacity;
+            CREATE TRIGGER trg_train_capacity
             BEFORE INSERT ON train_members
             WHEN (
                 SELECT COUNT(*)
                 FROM train_members
                 WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no
-            ) >= 3
+            ) >= COALESCE((SELECT capacity FROM train_profiles
+                          WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no), 3)
+            BEGIN
+                SELECT RAISE(ABORT, 'train_full');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_train_profile_capacity_update
+            BEFORE UPDATE OF capacity ON train_profiles
+            WHEN (SELECT COUNT(*) FROM train_members
+                  WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no) > NEW.capacity
+            BEGIN
+                SELECT RAISE(ABORT, 'train_full');
+            END;
+
+            CREATE TRIGGER IF NOT EXISTS trg_train_profile_capacity_insert
+            BEFORE INSERT ON train_profiles
+            WHEN (SELECT COUNT(*) FROM train_members
+                  WHERE guild_id = NEW.guild_id AND car_no = NEW.car_no) > NEW.capacity
             BEGIN
                 SELECT RAISE(ABORT, 'train_full');
             END;
