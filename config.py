@@ -1,6 +1,6 @@
 # 환경변수를 가장 먼저 읽고 채널·API·DB 설정을 검증합니다.
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,6 +21,7 @@ class Settings:
     drop_stats_origin: str = ''
     drop_stats_key: str = ''
     drop_stats_guild_id: int = 0
+    special_users_admin_key: str = field(default='', repr=False)
 
     @classmethod
     def from_env(cls, env_file=None):
@@ -55,4 +56,5 @@ class Settings:
             drop_stats_origin=os.getenv('DROP_STATS_ORIGIN','').strip(),
             drop_stats_key=os.getenv('DROP_STATS_READ_KEY','').strip(),
             drop_stats_guild_id=int(os.getenv('DROP_STATS_GUILD_ID','0') or '0'),
+            special_users_admin_key=os.getenv('SPECIAL_USERS_ADMIN_KEY','').strip(),
         )
