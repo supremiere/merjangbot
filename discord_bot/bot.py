@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 
 from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot, trains
-from discord_bot.commands import drop_stats
+from discord_bot.commands import drop_stats, special_users
 from services.drop_stats import DropStatsService
 from discord_bot.jobs.abyss import AbyssJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
@@ -65,6 +65,7 @@ class MerjangBot(discord.Client):
             module.register(self)
         if getattr(settings,'drop_stats_guild_id',0):
             drop_stats.register(self)
+        special_users.register(self)
         self.jobs = [
             NoticeJobs(self),
             ServerStatusJobs(self),
