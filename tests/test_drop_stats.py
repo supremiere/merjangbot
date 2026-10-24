@@ -172,3 +172,33 @@ def test_stats_are_restricted_to_guild_and_personal_identity():
         await respond(bot,public,'ranking')
         assert public.followup.send.call_args.kwargs['ephemeral'] is False
     asyncio.run(scenario())
+
+
+def test_unknown_302_is_preserved_without_inventing_dungeon_or_quantities():
+    data = {**DATA, 'runs':[{'mode':'abyss','runs':1084}],
+            'items':[{'mode':'abyss','item':'심해의 마력석','amount':71}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'흩어진 물길','runs':700},
+                            {'mode':'abyss','dungeon':'광기의 동굴','runs':82}],
+            'unclassified_details':[{'mode':'abyss','version':'unknown',
+                                     'reason':'legacy_missing_context','runs':302}]}
+    for kind in ('stats','mine'):
+        embed = build_embed(data,kind)
+        assert '미분류 302판' in embed.fields[1].value
+        assert '71개' in embed.fields[1].value and '700판' in embed.fields[1].value
+        assert embed.fields[-1].value == '1,084회'
+        # Only separately verified repair changes the known denominator.
+        corrected = {**data,'dungeon_runs':data['dungeon_runs']+[
+            {'mode':'abyss','dungeon':'흩어진 물길','runs':10}]}
+        value = build_embed(corrected,kind)
+        assert '미분류 292판' in value.fields[1].value and '710판' in value.fields[1].value
+        assert '71개' in value.fields[1].value and value.fields[-1].value == '1,084회'
+
+
+def test_unknown_dungeon_keys_and_partial_diagnostics_cannot_hide_unknown_total():
+    data = {**DATA,'runs':[{'mode':'abyss','runs':302}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'not-verified','runs':302}],
+            'unclassified_details':[{'mode':'abyss','version':'test','reason':'retry_exhausted','runs':2}]}
+    value = build_embed(data,'stats').fields[1].value
+    assert '미분류 302판' in value and '입장 변경: 2판' in value
+    assert value.split('```')[1].count('0판') == 3
+    assert len(value) < 1024
