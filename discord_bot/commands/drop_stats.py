@@ -1,7 +1,7 @@
 import discord
 from unicodedata import east_asian_width
 
-FOOTER = '한국 시간 오늘 · 가방 증가량 기준(구매·거래 포함)'
+FOOTER = '한국 시간 오늘 · 버전별 수집 방식 차이 있음(이전 가방 집계는 구매·거래 포함)'
 CATALOG = {
     'dungeon': {'야생의 영혼석': '피오드 던전 1층', '삼림의 영혼석': '피오드 던전 2층',
                 '공명의 영혼석': '룬다 던전 1층', '파동의 영혼석': '룬다 던전 2층',
@@ -39,7 +39,11 @@ def build_embed(data,kind):
         for mode,label in [('dungeon','영혼석'),('abyss','마력석')]:
             amounts = {row['item']: int(row['amount']) for row in data.get('items',[]) if row['mode']==mode}
             total = sum(int(row['runs']) for row in data.get('runs',[]) if row['mode']==mode)
-            by_dungeon = {row['dungeon']: int(row['runs']) for row in data.get('dungeon_runs',[]) if row['mode']==mode}
+            by_dungeon = {}
+            for row in data.get('dungeon_runs',[]):
+                if row['mode']==mode and row['dungeon'] in CATALOG[mode].values():
+                    name = row['dungeon']
+                    by_dungeon[name] = by_dungeon.get(name,0) + int(row['runs'])
             observations = {row['item']: row for row in data.get('observations',[]) if row['mode']==mode}
             observed_total += sum(int(row.get('observed_runs',0)) for item,row in observations.items() if item in CATALOG[mode])
             # Unclassified history is a separate total, never every dungeon's denominator.
@@ -71,6 +75,13 @@ def build_embed(data,kind):
             if unclassified:
                 amount = sum(amounts.get(item,0) for item in CATALOG[mode])
                 value += f'\n미분류 {unclassified:,}판 · 전체 {amount / total * 100:.1f}%'
+                value += '\n미분류는 던전 식별 정보가 없는 완료 · 특정 던전으로 추정하지 않음'
+                # Diagnostics may cover only retained raw reports. Never use
+                # them to replace the authoritative aggregate unknown total.
+                delayed = sum(int(row['runs']) for row in data.get('unclassified_details',[])
+                              if row['mode']==mode and row.get('reason') in ('retry_exhausted','entry_changed'))
+                if delayed:
+                    value += f'\n이 중 지역 재확인 실패·입장 변경: {min(delayed,unclassified):,}판'
             embed.add_field(name=f'{label} · 던전별 기준',value=value,inline=False)
         if observed_total:
             embed.add_field(name='AI로 관측한 완료',value=f'{observed_total:,}판 · 햄순이 완료와 별도 기록',inline=False)
