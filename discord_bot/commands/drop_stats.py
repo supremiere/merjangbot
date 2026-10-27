@@ -56,7 +56,9 @@ def build_embed(data,kind):
                 completion = f'{runs:,}판'
                 observation = observations.get(item,{})
                 observed = int(observation.get('observed_runs',0))
-                rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
+                # Amounts include all clients, but classified runs may omit a
+                # second client's clears. Never divide unmatched populations.
+                rate = '집계 불완전' if unclassified else f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
                 if observed > 0:
                     # These are separately recorded AI clears, not missing
                     # helper reports. Never add them to helper/unknown totals.
@@ -73,8 +75,7 @@ def build_embed(data,kind):
                 value += '\n관측: AI가 확인한 완료 · 관측 획득률: 획득한 판 ÷ 관측 판수'
                 value += '\n두 값이 있으면 햄순이 / 관측 순서 · 서로 합산하지 않음'
             if unclassified:
-                amount = sum(amounts.get(item,0) for item in CATALOG[mode])
-                value += f'\n미분류 {unclassified:,}판 · 전체 {amount / total * 100:.1f}%'
+                value += f'\n미분류 {unclassified:,}판 · 햄순이 획득률 표시 보류'
                 value += '\n미분류는 던전 식별 정보가 없는 완료 · 특정 던전으로 추정하지 않음'
                 # Diagnostics may cover only retained raw reports. Never use
                 # them to replace the authoritative aggregate unknown total.
