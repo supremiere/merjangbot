@@ -56,9 +56,9 @@ def build_embed(data,kind):
                 completion = f'{runs:,}판'
                 observation = observations.get(item,{})
                 observed = int(observation.get('observed_runs',0))
-                # Amounts include all clients, but classified runs may omit a
-                # second client's clears. Never divide unmatched populations.
-                rate = '집계 불완전' if unclassified else f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
+                # Show the ratio from recorded quantities and known clears.
+                # Unclassified history stays separate, without guessed allocation.
+                rate = f'{amount / runs * 100:.1f}%' if runs > 0 else '—'
                 if observed > 0:
                     # These are separately recorded AI clears, not missing
                     # helper reports. Never add them to helper/unknown totals.
@@ -70,19 +70,12 @@ def build_embed(data,kind):
                 short = item.replace('의 영혼석','').replace('의 마력석','')
                 rows.append((short,f'{amount:,}개',completion,rate))
             value = compact_table(rows)
-            value += '\n햄순이 획득률: 획득 개수 ÷ 해당 던전 완료'
+            value += '\n기록 기준: 획득 개수 ÷ 해당 던전 완료'
             if used_observations:
                 value += '\n관측: AI가 확인한 완료 · 관측 획득률: 획득한 판 ÷ 관측 판수'
                 value += '\n두 값이 있으면 햄순이 / 관측 순서 · 서로 합산하지 않음'
             if unclassified:
-                value += f'\n미분류 {unclassified:,}판 · 햄순이 획득률 표시 보류'
-                value += '\n미분류는 던전 식별 정보가 없는 완료 · 특정 던전으로 추정하지 않음'
-                # Diagnostics may cover only retained raw reports. Never use
-                # them to replace the authoritative aggregate unknown total.
-                delayed = sum(int(row['runs']) for row in data.get('unclassified_details',[])
-                              if row['mode']==mode and row.get('reason') in ('retry_exhausted','entry_changed'))
-                if delayed:
-                    value += f'\n이 중 지역 재확인 실패·입장 변경: {min(delayed,unclassified):,}판'
+                value += f'\n미분류 {unclassified:,}판'
             embed.add_field(name=f'{label} · 던전별 기준',value=value,inline=False)
         if observed_total:
             embed.add_field(name='AI로 관측한 완료',value=f'{observed_total:,}판 · 햄순이 완료와 별도 기록',inline=False)
