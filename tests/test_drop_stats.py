@@ -60,7 +60,8 @@ def test_existing_quantities_and_unclassified_runs_remain_visible():
         assert '59개' in table and '3판' in table
         assert '713판' not in table and '710판' not in table
         assert '미분류 710판' in value
-        assert '집계 불완전' in value and '8.3%' not in value
+        assert '1966.7%' in table and '8.3%' not in value
+        assert '불완전' not in value and '표시 보류' not in value
         assert embed.fields[-1].value == '713회'
 
 
@@ -93,26 +94,28 @@ def test_unclassified_only_counts_are_not_repeated_for_every_dungeon():
     assert embed.fields[-1].value == '857회'
 
 
-def test_unclassified_runs_preserve_counts_but_hide_unmatched_rate():
+def test_unclassified_runs_preserve_counts_and_show_current_recorded_rate():
     data = {**DATA,'items':[{'mode':'abyss','item':'허상의 마력석','amount':84}],
             'runs':[{'mode':'abyss','runs':877}],
             'dungeon_runs':[{'mode':'abyss','dungeon':'허상의 정박지','runs':873}]}
     for kind in ('stats','mine'):
         value=build_embed(data,kind).fields[1].value
         harbor=next(row for row in value.splitlines() if row.startswith('허상'))
-        assert '84개' in harbor and '873판' in harbor and '집계 불완전' in harbor
-        assert '9.6%' not in harbor
+        assert '84개' in harbor and '873판' in harbor and '9.6%' in harbor
+        assert '불완전' not in value and '표시 보류' not in value
+        assert '기록 기준' in value
         assert '미분류 4판' in value
         assert value.count('873판') == 1
 
 
-def test_two_client_partial_classification_never_displays_inflated_rate():
+def test_partial_classification_uses_recorded_denominator_without_assigning_unknown_runs():
     data={**DATA,'items':[{'mode':'abyss','item':'심해의 마력석','amount':34}],
           'runs':[{'mode':'abyss','runs':283}],
           'dungeon_runs':[{'mode':'abyss','dungeon':'흩어진 물길','runs':103}]}
     value=build_embed(data,'mine').fields[1].value
     assert '34개' in value and '103판' in value and '미분류 180판' in value
-    assert '33.0%' not in value and '집계 불완전' in value
+    assert '33.0%' in value and '12.0%' not in value
+    assert '불완전' not in value
 
 
 def test_no_completion_never_divides_by_zero_or_invents_a_rate():
@@ -148,9 +151,9 @@ def test_observations_never_add_to_known_helper_denominator_or_unknown_runs():
             'observations':[{'mode':'dungeon','item':'공명의 영혼석','observed_runs':10,'hit_runs':3}]}
     value = build_embed(data,'stats').fields[0].value
     row = next(row for row in value.splitlines() if row.startswith('공명'))
-    assert '10판' in row and '집계 불완전' in row
+    assert '10판' in row and '40.0%' in row
     assert '20판' not in row and '관측 10판' in row
-    assert '집계 불완전 / 30.0%' in row and '40.0%' not in row
+    assert '40.0% / 30.0%' in row
     assert '미분류 2판' in value
 
 
@@ -209,6 +212,7 @@ def test_unknown_dungeon_keys_and_partial_diagnostics_cannot_hide_unknown_total(
             'dungeon_runs':[{'mode':'abyss','dungeon':'not-verified','runs':302}],
             'unclassified_details':[{'mode':'abyss','version':'test','reason':'retry_exhausted','runs':2}]}
     value = build_embed(data,'stats').fields[1].value
-    assert '미분류 302판' in value and '입장 변경: 2판' in value
+    assert '미분류 302판' in value
+    assert '입장 변경' not in value and '표시 보류' not in value and '불완전' not in value
     assert value.split('```')[1].count('0판') == 3
     assert len(value) < 1024
