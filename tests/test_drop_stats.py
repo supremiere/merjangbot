@@ -2,11 +2,82 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from discord_bot.commands.drop_stats import build_embed,respond
+from discord_bot.commands.drop_stats import build_embed,respond,personal_pages,PersonalPages
 
 DATA = {'day':'2026-10-03','items':[], 'runs':[], 'leaders':[
     {'mode':'dungeon','nickname':'@everyone **돌왕**','amount':10},
     {'mode':'abyss','nickname':'마력왕','amount':2}]}
+
+
+def client_record(number,runs,amount):
+    return {'client_number':number,'nickname':f'덩법{number}',
+            'runs':[{'mode':'abyss','runs':runs}],
+            'items':[{'mode':'abyss','item':'심해의 마력석','amount':amount}],
+            'dungeon_runs':[{'mode':'abyss','dungeon':'흩어진 물길','runs':runs}]}
+
+
+def test_personal_records_show_two_separate_pcs_and_never_use_account_denominator():
+    data={**DATA,'runs':[{'mode':'abyss','runs':30}],
+          'items':[{'mode':'abyss','item':'심해의 마력석','amount':7}],
+          'clients':[client_record(1,10,2),client_record(2,20,5)]}
+    pages=personal_pages(data)
+    assert len(pages)==1 and len(pages[0])==2
+    first,second=pages[0]
+    assert first.title=='덩법1 · 내 오늘 기록'
+    assert second.title=='덩법2 · 내 오늘 기록'
+    assert first.fields[-1].value=='10회' and second.fields[-1].value=='20회'
+    a=next(line for line in first.fields[1].value.splitlines() if line.startswith('심해'))
+    b=next(line for line in second.fields[1].value.splitlines() if line.startswith('심해'))
+    assert '2개' in a and '10판' in a and '20.0%' in a
+    assert '5개' in b and '20판' in b and '25.0%' in b
+    assert all('30판' not in str(e.to_dict()) for e in pages[0])
+    assert sum(len(e) for e in pages[0])<6000
+    # Public totals still combine the two characters exactly once.
+    assert build_embed(data,'stats').fields[-1].value=='30회'
+
+
+def test_old_records_are_not_assigned_to_either_pc_and_nicknames_cannot_ping():
+    old={**client_record(0,3,1),'nickname':'기존 기록'}
+    pc={**client_record(1,1,1),'nickname':'@everyone **덩법**1'}
+    pages=personal_pages({**DATA,'clients':[pc,old]})
+    assert '@everyone' not in pages[0][0].title
+    assert '기존 기록' in pages[0][1].title
+    assert pages[0][0].fields[-1].value=='1회'
+    assert pages[0][1].fields[-1].value=='3회'
+
+
+def test_personal_pagination_keeps_all_pcs_private_and_responds_with_separate_embeds():
+    async def run():
+        data={**DATA,'clients':[client_record(i,10,1) for i in range(1,7)]}
+        pages=personal_pages(data)
+        assert len(pages)==3 and all(sum(len(e) for e in page)<6000 for page in pages)
+        view=PersonalPages(pages,123)
+        owner=interaction();owner.response.edit_message=AsyncMock()
+        assert await view.interaction_check(owner)
+        other=interaction();other.user.id=456
+        assert not await view.interaction_check(other)
+        assert other.response.send_message.call_args.kwargs['ephemeral']
+        await view.show(owner,1)
+        assert owner.response.edit_message.call_args.kwargs['embeds'][0].title.startswith('덩법3')
+        await view.show(owner,1)
+        assert view.next_page.disabled
+        bot=SimpleNamespace(settings=SimpleNamespace(drop_stats_guild_id=222),
+                            drop_stats=SimpleNamespace(fetch=AsyncMock(return_value=data)))
+        await respond(bot,owner,'mine')
+        result=owner.followup.send.call_args.kwargs
+        assert result['ephemeral'] and len(result['embeds'])==2
+        assert result['embeds'][1].title.startswith('덩법2')
+        assert isinstance(result['view'],PersonalPages)
+        assert not result['allowed_mentions'].everyone
+        view.stop();result['view'].stop()
+    asyncio.run(run())
+
+
+def test_pc_rankings_keep_both_characters_and_existing_public_format():
+    data={**DATA,'leaders':[{'mode':'abyss','nickname':'덩법2','amount':5},
+                            {'mode':'abyss','nickname':'덩법1','amount':2}]}
+    value=build_embed(data,'ranking').fields[1].value
+    assert '1. 덩법2 — 5개' in value and '2. 덩법1 — 2개' in value
 
 def interaction(guild=222):
     return SimpleNamespace(guild_id=guild,user=SimpleNamespace(id=123),
