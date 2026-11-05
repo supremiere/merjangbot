@@ -84,6 +84,51 @@ def build_embed(data,kind):
     embed.set_footer(text=FOOTER)
     return embed
 
+
+def personal_pages(data):
+    """Show two installations at once; never mix their numerators/denominators."""
+    clients = data.get('clients') or []
+    if not clients:
+        return [[build_embed(data,'mine')]]
+    embeds = []
+    for client in clients:
+        embed = build_embed({**client,'day':data['day']},'mine')
+        embed.title = f"{safe_nickname(client['nickname'])} · 내 오늘 기록"
+        embeds.append(embed)
+    return [embeds[i:i+2] for i in range(0,len(embeds),2)]
+
+
+class PersonalPages(discord.ui.View):
+    def __init__(self,pages,user_id):
+        super().__init__(timeout=300)
+        self.pages,self.user_id,self.index = pages,user_id,0
+        self.update_buttons()
+
+    def update_buttons(self):
+        self.previous.disabled = self.index == 0
+        self.next_page.disabled = self.index == len(self.pages)-1
+
+    async def interaction_check(self,interaction):
+        if interaction.user.id == self.user_id:
+            return True
+        await interaction.response.send_message('본인의 내 기록에서 확인해주세요.',ephemeral=True)
+        return False
+
+    async def show(self,interaction,offset):
+        self.index = min(len(self.pages)-1,max(0,self.index+offset))
+        self.update_buttons()
+        await interaction.response.edit_message(embeds=self.pages[self.index],view=self,
+                                                allowed_mentions=discord.AllowedMentions.none())
+
+    @discord.ui.button(label='이전 PC',style=discord.ButtonStyle.secondary)
+    async def previous(self,interaction,button):
+        await self.show(interaction,-1)
+
+    @discord.ui.button(label='다음 PC',style=discord.ButtonStyle.secondary)
+    async def next_page(self,interaction,button):
+        await self.show(interaction,1)
+
+
 async def respond(bot,interaction,kind):
     guild_id = getattr(bot.settings,'drop_stats_guild_id',0)
     if not guild_id or interaction.guild_id != guild_id:
@@ -94,8 +139,14 @@ async def respond(bot,interaction,kind):
     try:
         # Personal identity comes from Discord's interaction, not a typed nickname.
         data = await bot.drop_stats.fetch(interaction.user.id if private else None)
-        await interaction.followup.send(embed=build_embed(data,kind),ephemeral=private,
-                                        allowed_mentions=discord.AllowedMentions.none())
+        if private:
+            pages = personal_pages(data)
+            view = PersonalPages(pages,interaction.user.id) if len(pages)>1 else None
+            await interaction.followup.send(embeds=pages[0],view=view,ephemeral=True,
+                                            allowed_mentions=discord.AllowedMentions.none())
+        else:
+            await interaction.followup.send(embed=build_embed(data,kind),ephemeral=False,
+                                            allowed_mentions=discord.AllowedMentions.none())
     except RuntimeError as error:
         await interaction.followup.send(str(error),ephemeral=True)
 
