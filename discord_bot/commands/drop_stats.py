@@ -1,5 +1,8 @@
 import discord
+import logging
 from unicodedata import east_asian_width
+
+logger = logging.getLogger(__name__)
 
 FOOTER = '한국 시간 오늘 · 버전별 수집 방식 차이 있음(이전 가방 집계는 구매·거래 포함)'
 CATALOG = {
@@ -136,19 +139,40 @@ async def respond(bot,interaction,kind):
         return
     private = kind == 'mine'
     await interaction.response.defer(thinking=True,ephemeral=private)
+    view = None
+    stage = 'fetch'
     try:
         # Personal identity comes from Discord's interaction, not a typed nickname.
         data = await bot.drop_stats.fetch(interaction.user.id if private else None)
+        stage = 'format'
         if private:
             pages = personal_pages(data)
             view = PersonalPages(pages,interaction.user.id) if len(pages)>1 else None
-            await interaction.followup.send(embeds=pages[0],view=view,ephemeral=True,
+            # Webhook.send rejects view=None (unlike message editing).
+            # Omit the argument entirely when the first page is the only page.
+            options = {'view': view} if view is not None else {}
+            stage = 'send'
+            await interaction.followup.send(embeds=pages[0],ephemeral=True,**options,
                                             allowed_mentions=discord.AllowedMentions.none())
         else:
-            await interaction.followup.send(embed=build_embed(data,kind),ephemeral=False,
+            embed = build_embed(data,kind)
+            stage = 'send'
+            await interaction.followup.send(embed=embed,ephemeral=False,
                                             allowed_mentions=discord.AllowedMentions.none())
     except RuntimeError as error:
-        await interaction.followup.send(str(error),ephemeral=True)
+        message = str(error)
+    except Exception as error:
+        # Fixed stage/type only: do not log interaction tokens or record bodies.
+        logger.error('드랍 통계 응답 실패: kind=%s stage=%s error=%s',kind,stage,type(error).__name__)
+        message = '기록을 표시하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+    else:
+        return
+    if view is not None:
+        view.stop()
+    try:
+        await interaction.followup.send(message,ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
+    except discord.HTTPException as error:
+        logger.error('드랍 통계 오류 안내 실패: kind=%s error=%s',kind,type(error).__name__)
 
 def register(bot):
     @bot.tree.command(name='드랍통계',description='오늘 영혼석·마력석 수량과 완료 대비 획득률을 확인합니다.')
