@@ -154,7 +154,7 @@ def test_admin_create_and_conductor_edit_use_selected_settings(repo):
         await select(admin, "train_type", "waterway", interaction)
         await select(admin, "capacity", 4, interaction)
         picker = next(x for x in admin.children if getattr(x, "custom_id", "") == "train:admin:create-conductor")
-        picker._values = [SimpleNamespace(id=100, name="기장", display_name="기장", bot=False)]
+        picker._values = [SimpleNamespace(id=100, name="차장", display_name="차장", bot=False)]
         await picker.callback(interaction)
         assert train_title(repo.snapshot(10)[1]) == "물길열차 (4인)"
         interaction.user.id = 100
@@ -169,7 +169,7 @@ def test_admin_create_and_conductor_edit_use_selected_settings(repo):
         interaction.user.id = 100
         repo.set_conductor(10, 1, 300)
         await stale.save.callback(interaction)
-        assert "기장만" in interaction.edit_original_response.call_args.kwargs["content"]
+        assert "차장만" in interaction.edit_original_response.call_args.kwargs["content"]
     asyncio.run(scenario())
 
 

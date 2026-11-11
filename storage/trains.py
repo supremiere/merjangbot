@@ -291,7 +291,7 @@ class TrainRepository:
             self._save_profile(conn, guild_id, car_no, train_type, capacity)
 
     def set_conductor(self, guild_id, car_no, user_id):
-        """관리자가 운행 중인 열차의 기장을 교체하고 기존 승객은 유지합니다."""
+        """관리자가 운행 중인 열차의 차장을 교체하고 기존 승객은 유지합니다."""
         car_no = self._check_car(car_no)
         guild_id = int(guild_id)
         user_id = int(user_id)
@@ -327,7 +327,7 @@ class TrainRepository:
             if current_conductor == user_id:
                 return
 
-            # 같은 호차 승객을 새 기장으로 지정하는 것도 허용합니다.
+            # 같은 호차 승객을 새 차장으로 지정하는 것도 허용합니다.
             conn.execute(
                 """
                 DELETE FROM train_members

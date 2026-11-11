@@ -48,7 +48,7 @@ class FakeController:
         if error.code == "not_boarded":
             return "현재 탑승 중인 열차가 없습니다."
         if error.code == "conductor_cannot_leave":
-            return "기장은 좌석도의 '내 열차 종료' 버튼을 이용해 주세요."
+            return "차장은 좌석도의 '내 열차 종료' 버튼을 이용해 주세요."
         return error.code
 
 
@@ -169,7 +169,7 @@ def test_public_leave_button_guides_conductor_to_end_button():
         thinking=True,
     )
     interaction.edit_original_response.assert_awaited_once_with(
-        content="기장은 좌석도의 '내 열차 종료' 버튼을 이용해 주세요."
+        content="차장은 좌석도의 '내 열차 종료' 버튼을 이용해 주세요."
     )
 
 
