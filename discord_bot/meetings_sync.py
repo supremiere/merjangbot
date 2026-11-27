@@ -178,16 +178,41 @@ class MeetingDiscordSync:
                 pass
         raise MeetingAccessError("파티방 후보의 생성 기록을 확인할 수 없습니다. 관리자에게 알려주세요.")
 
+    async def _recruit_channel(self, guild, party, *, final=False):
+        original = party["recruit_channel_id"]
+        if original:
+            channel = await _get_channel(guild, original, discord.TextChannel)
+            if channel is not None or final:
+                return channel
+        current = self.store.settings(guild.id)["recruit_channel_id"]
+        if current == original:
+            return None
+        return await _get_channel(guild, current, discord.TextChannel)
+
+    async def _room_category(self, guild, party):
+        override = self.store.settings(guild.id)["category_id"]
+        if override:
+            category = await _get_channel(guild, override, discord.CategoryChannel)
+            if category is None:
+                raise MeetingAccessError("지정한 파티방 카테고리가 없어졌어요. 서버 설정에서 모집 채널 위치 사용을 선택해주세요.")
+            return category
+        recruit = await self._recruit_channel(guild, party)
+        if recruit is None:
+            raise MeetingAccessError("파티방을 만들 위치를 찾을 수 없어요. 모집 채널 설정을 확인해주세요.")
+        if recruit.category_id is None:
+            return None
+        category = await _get_channel(guild, recruit.category_id, discord.CategoryChannel)
+        if category is None:
+            raise MeetingAccessError("모집 채널의 카테고리가 변경됐어요. 위치를 확인한 뒤 다시 시도해주세요.")
+        return category
+
     async def _ensure_room(self, guild, party, *, create):
         room = await self._locate_room(guild, party)
         permissions = room_overwrites(guild, self.bot_id, party["members"], party["watchers"])
         if room is None:
             if not create:
                 raise MeetingAccessError("파티방이 없어 입장할 수 없습니다. 파티 관리에서 복구해주세요.")
-            settings = self.store.settings(guild.id)
-            category = await _get_channel(guild, settings["category_id"], discord.CategoryChannel)
-            if category is None:
-                raise MeetingAccessError("파티방 카테고리를 설정해주세요.")
+            category = await self._room_category(guild, party)
             marker = self._room_marker(party)
             try:
                 room = await guild.create_text_channel(
@@ -279,15 +304,11 @@ class MeetingDiscordSync:
             raise
 
     async def _public(self, guild, party, *, final=False):
-        channel_id = party["recruit_channel_id"] or self.store.settings(guild.id)["recruit_channel_id"]
-        channel = await _get_channel(guild, channel_id, discord.TextChannel)
+        channel = await self._recruit_channel(guild, party, final=final)
         if channel is None:
             if final:
                 return
-            channel_id = self.store.settings(guild.id)["recruit_channel_id"]
-            channel = await _get_channel(guild, channel_id, discord.TextChannel)
-            if channel is None:
-                raise ResourceError("모집 메시지를 게시할 텍스트 채널을 설정해주세요.")
+            raise ResourceError("모집 메시지를 게시할 텍스트 채널을 설정해주세요.")
         if party["recruit_channel_id"] != channel.id:
             self._refs(party, recruit_channel_id=channel.id, recruit_id=None)
         marker = _marker(guild.id, party["id"], "모집")

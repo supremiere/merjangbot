@@ -130,6 +130,28 @@ def environment(tmp_path):
     return store, network, adapter, pid
 
 
+@pytest.mark.parametrize("recruit_category", [500, None])
+def test_auto_place_room_without_category_or_log_setting(environment, recruit_category):
+    async def exercise():
+        store, network, adapter, _ = environment
+        service = MeetingService(adapter.bot, store, adapter)
+        store.configure(10, 1, enabled=False, category_id=None)
+        network.channels[502].category_id = recruit_category
+        await service.configure(interaction(network, 91, admin=True), enabled=True)
+        party = await service.create(interaction(network, 92), destination="자동 파티방", capacity=4)
+        created = network.guild.create_text_channel.await_args.kwargs
+        assert created["category"] is (network.category if recruit_category else None)
+        assert created["overwrites"][network.default_role].view_channel is False
+        assert party["phase"] == "ready" and party["spectating"]
+        assert store.settings(10)["log_channel_id"] is None
+        # Reopening or fixing resources must keep the room even after moving recruitment.
+        network.channels[502].category_id = None if recruit_category else 500
+        await adapter.sync(network.guild, store.get(10, party["id"]))
+        network.guild.create_text_channel.assert_awaited_once()
+
+    asyncio.run(exercise())
+
+
 def test_room_permissions_changes_and_repair_never_duplicate_resources(environment):
     async def exercise():
         store, network, adapter, pid = environment
@@ -140,6 +162,7 @@ def test_room_permissions_changes_and_repair_never_duplicate_resources(environme
             return store.get(10, pid)
 
         state = await sync()
+        assert guild.create_text_channel.await_args.kwargs["category"] is network.category
         room = network.channels[state["room_id"]]
         assert network.messages[room.id][state["guide_id"]].pinned
         await sync()

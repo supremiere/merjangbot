@@ -146,8 +146,8 @@ class MeetingService:
     async def create(self, interaction, **fields):
         guild, actor = self._actor(interaction)
         settings = self.store.settings(guild.id)
-        if not settings["category_id"] or not settings["recruit_channel_id"]:
-            raise MeetingError("관리자가 먼저 파티방 카테고리와 모집 채널을 설정해야 해요.")
+        if not settings["recruit_channel_id"]:
+            raise MeetingError("관리자가 먼저 모집 채널을 설정해야 해요.")
         party = self.store.create(guild.id, actor.id, request_id=str(interaction.id), **fields)
         pid = party["id"]
         async with self._lock(guild.id, pid):
@@ -330,8 +330,8 @@ class MeetingService:
                     raise MeetingError("이 서버에 있는 올바른 종류의 채널을 선택해 주세요.")
             desired = dict(settings, **fields)
             if desired["enabled"] and not all(desired[k] for k in
-                    ("panel_channel_id", "recruit_channel_id", "promo_channel_id", "category_id")):
-                raise MeetingError("먼저 메인 패널·모집·홍보 채널과 파티방 카테고리를 지정해 주세요.")
+                    ("panel_channel_id", "recruit_channel_id", "promo_channel_id")):
+                raise MeetingError("먼저 메인 패널·모집·홍보 채널을 지정해 주세요.")
             result = self.store.configure(guild.id, actor.id, **fields)
             try:
                 if result["panel_channel_id"]:
