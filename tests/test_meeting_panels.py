@@ -105,6 +105,8 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         await meetings.show_settings(i)
         reply = i.response.send_message.await_args.kwargs
         self.assertIn("무제한", reply["embed"].fields[1].value)
+        self.assertIn("모집 채널 위치 사용", reply["embed"].fields[0].value)
         picker = meetings.ChannelPicker(i, "category_id")
         self.assertEqual(picker.children[0].channel_types, [discord.ChannelType.category])
+        self.assertEqual(picker.children[1].label, "모집 채널 위치 사용")
         self.assertEqual(len(meetings.LimitsModal(i, settings).children), 4)

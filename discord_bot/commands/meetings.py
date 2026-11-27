@@ -17,8 +17,8 @@ CHANNEL_LABELS = {
     "panel_channel_id": "메인 패널 채널",
     "recruit_channel_id": "모집 채널",
     "promo_channel_id": "홍보 채널 (자유-채팅)",
-    "category_id": "파티방 카테고리",
-    "log_channel_id": "관리자 로그 채널",
+    "category_id": "파티방 위치 (선택)",
+    "log_channel_id": "관리자 로그 채널 (선택)",
 }
 
 
@@ -374,13 +374,14 @@ class ChannelPicker(PanelView):
         select = discord.ui.ChannelSelect(channel_types=kinds, placeholder=CHANNEL_LABELS[key])
         select.callback = self.channel_selected
         self.add_item(select)
-        if key == "log_channel_id":
-            clear = discord.ui.Button(label="로그 채널 연결 해제")
+        if key in ("log_channel_id", "category_id"):
+            label = "모집 채널 위치 사용" if key == "category_id" else "로그 채널 연결 해제"
+            clear = discord.ui.Button(label=label)
             clear.callback = self.clear
             self.add_item(clear)
 
     async def clear(self, interaction):
-        await save_setting(interaction, log_channel_id=None)
+        await save_setting(interaction, **{self.key: None})
 
     async def channel_selected(self, interaction):
         cid = int(interaction.data["values"][0])
@@ -442,9 +443,10 @@ async def show_settings(interaction, *, saved=False):
     state = "활성" if settings["enabled"] else "비활성"
     created_limit = f"{settings['max_created']}개" if settings["max_created"] else "무제한"
     embed = discord.Embed(title="⚙️ 계획된 만남 서버 설정", color=0x40577B)
-    embed.description = f"현재 **{state}** · 메인·모집·홍보 채널과 파티방 카테고리를 선택한 뒤 기능을 활성화하세요."
+    embed.description = f"현재 **{state}** · 메인·모집·홍보 채널을 선택한 뒤 기능을 활성화하세요. 파티방은 기본으로 모집 채널과 같은 위치에 생겨요."
     embed.add_field(name="채널", value="\n".join(
-        f"{label} · <#{settings[key]}>" if settings[key] else f"{label} · 미설정"
+        f"{label} · " + (f"<#{settings[key]}>" if settings[key] else
+                         ("모집 채널 위치 사용" if key == "category_id" else "미설정"))
         for key, label in CHANNEL_LABELS.items()), inline=False)
     embed.add_field(name="홍보·모집", value=(
         f"홍보 쿨타임 {settings['cooldown']}초 · 최대 정원 {settings['max_capacity']}명\n"
