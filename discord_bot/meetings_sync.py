@@ -66,6 +66,16 @@ def _owned(message, channel, bot_id, marker):
             and bool(message.embeds) and message.embeds[0].footer.text == marker)
 
 
+async def _guild_channel_topics(guild) -> dict[int, str | None]:
+    """Keep every live channel ID, but only text channels can own a party topic."""
+    # Guild.fetch_channels() rejects the entire response when discord.py doesn't
+    # recognize one channel type. Use the same HTTP client without building models.
+    channels = await guild._state.http.get_all_guild_channels(guild.id)
+    text_types = (discord.ChannelType.text.value, discord.ChannelType.news.value)
+    return {int(channel["id"]): channel.get("topic") if channel["type"] in text_types else None
+            for channel in channels}
+
+
 async def _get_channel(guild, channel_id, channel_type):
     if not channel_id:
         return None
@@ -74,7 +84,7 @@ async def _get_channel(guild, channel_id, channel_type):
     except discord.NotFound as exc:
         if exc.code != UNKNOWN_CHANNEL:
             raise
-        if any(c.id == channel_id for c in await guild.fetch_channels()):
+        if channel_id in await _guild_channel_topics(guild):
             raise ResourceError("서버 목록에는 채널이 남아 있습니다. 봇의 채널 접근 권한을 확인해주세요.") from exc
         return None
     if not isinstance(channel, channel_type) or channel.guild.id != guild.id or channel.id != channel_id:
@@ -148,8 +158,9 @@ class MeetingDiscordSync:
         # this POST after a lost reply. Do not publish or finish a disband while
         # an additional room still carries the same creation marker.
         marker = self._room_marker(party)
-        for channel in await guild.fetch_channels():
-            if isinstance(channel, discord.TextChannel) and channel.id != room.id and channel.topic == marker:
+        topics = await _guild_channel_topics(guild)
+        for channel_id, topic in topics.items():
+            if channel_id != room.id and topic == marker:
                 raise MeetingAccessError("같은 파티 식별자의 방이 여러 개입니다. 관리자에게 생성 기록 확인을 요청해주세요.")
 
     async def _locate_room(self, guild, party):
@@ -162,18 +173,21 @@ class MeetingDiscordSync:
 
         # An interrupted Create Channel may have succeeded before its ID was stored.
         # A copied topic alone does not prove ownership of an untracked channel.
-        channels = await guild.fetch_channels()
-        matches = [c for c in channels if isinstance(c, discord.TextChannel) and c.topic == marker]
+        topics = await _guild_channel_topics(guild)
+        matches = [channel_id for channel_id, topic in topics.items() if topic == marker]
         if not matches:
             return None
         if len(matches) == 1:
-            candidate = matches[0]
+            candidate_id = matches[0]
             try:
                 async for entry in guild.audit_logs(limit=100, action=discord.AuditLogAction.channel_create,
                                                     user=discord.Object(self.bot_id)):
-                    if getattr(entry.target, "id", None) == candidate.id and entry.reason == marker:
-                        self._refs(party, room_id=candidate.id, guide_id=None)
-                        return candidate
+                    if getattr(entry.target, "id", None) == candidate_id and entry.reason == marker:
+                        candidate = await _get_channel(guild, candidate_id, discord.TextChannel)
+                        if candidate is not None and candidate.topic == marker:
+                            self._refs(party, room_id=candidate_id, guide_id=None)
+                            return candidate
+                        break
             except discord.Forbidden:
                 pass
         raise MeetingAccessError("파티방 후보의 생성 기록을 확인할 수 없습니다. 관리자에게 알려주세요.")
@@ -447,7 +461,7 @@ class MeetingDiscordSync:
                 except discord.NotFound as exc:
                     if exc.code != UNKNOWN_CHANNEL:
                         raise
-                    if any(c.id == room.id for c in await guild.fetch_channels()):
+                    if room.id in await _guild_channel_topics(guild):
                         raise ResourceError("삭제 응답과 서버 채널 목록이 달라 해산을 보류했습니다. 파티방을 확인해주세요.") from exc
             self._refs(party, phase="disbanded", room_id=None, guide_id=None, error="", dirty=False)
             return
