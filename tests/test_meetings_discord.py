@@ -33,19 +33,31 @@ class LocalDiscord:
         self.messages = {}
         self.next_message = 5000
         self.create_log = []
+        self.extra_channels = []
         self.members = {}
+        http = SimpleNamespace(get_all_guild_channels=AsyncMock(side_effect=self.channel_rows))
         self.guild = SimpleNamespace(
-            id=10, owner_id=123, default_role=self.default_role,
+            id=10, owner_id=123, default_role=self.default_role, _state=SimpleNamespace(http=http),
             me=SimpleNamespace(id=self.bot_id),
             roles=[self.default_role, self.admin_role], create_text_channel=AsyncMock(side_effect=self.create),
-            fetch_channel=AsyncMock(side_effect=self.channel), fetch_channels=AsyncMock(side_effect=lambda: list(self.channels.values())),
+            fetch_channel=AsyncMock(side_effect=self.channel),
             fetch_member=AsyncMock(side_effect=self.member),
             audit_logs=self.audit_logs,
         )
+        self.guild.fetch_channels = lambda: discord.Guild.fetch_channels(self.guild)
         self.category = Mock(spec=discord.CategoryChannel, id=500, guild=self.guild)
         self.channels[self.category.id] = self.category
         for cid in (501, 502, 503):
             self.add_text(cid)
+
+    def channel_rows(self, guild_id):
+        assert guild_id == self.guild.id
+        rows = []
+        for channel in self.channels.values():
+            is_text = isinstance(channel, discord.TextChannel)
+            rows.append(dict(id=str(channel.id), name="channel", type=0 if is_text else 4,
+                             topic=channel.topic if is_text else None, position=0, permission_overwrites=[]))
+        return rows + self.extra_channels
 
     async def audit_logs(self, **options):
         for entry in self.create_log:
@@ -134,6 +146,7 @@ def environment(tmp_path):
 def test_auto_place_room_without_category_or_log_setting(environment, recruit_category):
     async def exercise():
         store, network, adapter, _ = environment
+        network.extra_channels.append(dict(id="900", type=20))
         service = MeetingService(adapter.bot, store, adapter)
         store.configure(10, 1, enabled=False, category_id=None)
         network.channels[502].category_id = recruit_category
@@ -191,6 +204,32 @@ def test_room_permissions_changes_and_repair_never_duplicate_resources(environme
         await adapter.sync_panel(guild, store.settings(10))
         await adapter.sync_panel(guild, store.settings(10))
         assert len(network.messages[501]) == 1
+
+    asyncio.run(exercise())
+
+
+def test_repair_saved_party_with_unknown_guild_channel_and_inaccessible_log(environment):
+    async def exercise():
+        store, network, adapter, pid = environment
+        guild = network.guild
+        # The SDK's bulk conversion aborts even though this channel is unrelated to the party.
+        network.extra_channels.append(dict(id="900", type=20, topic=adapter._room_marker(store.get(10, pid))))
+        service = MeetingService(adapter.bot, store, adapter)
+        adapter.bot.intents = discord.Intents.none()
+        guild.get_channel = network.channels.get
+        network.channels[503].send.side_effect = http_error(403, 50001)
+        store.configure(10, 1, log_channel_id=503)
+        store.refs(10, pid, dirty=True, error="이전 생성 실패", retry_count=6)
+        interaction(network, 100)
+        admin = interaction(network, 200, admin=True)
+        for _ in range(2):
+            state = await service.act(admin, pid, "repair")
+            assert state["id"] == pid and state["phase"] == "ready"
+            assert not state["dirty"] and not state["error"]
+            assert network.messages[state["room_id"]][state["guide_id"]].pinned
+        guild.create_text_channel.assert_awaited_once()
+        assert len(network.messages[state["room_id"]]) == len(network.messages[502]) == 1
+        assert network.channels[503].send.await_count == 2
 
     asyncio.run(exercise())
 

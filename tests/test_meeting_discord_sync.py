@@ -46,6 +46,8 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.store.db = self.db
         self.guild = MagicMock(spec=discord.Guild)
         self.guild.id, self.guild.owner_id = 10, 100
+        self.channel_list = AsyncMock(return_value=[])
+        self.guild._state = SimpleNamespace(http=SimpleNamespace(get_all_guild_channels=self.channel_list))
         everyone, self.admin_role = role(10, "@everyone"), role(20, "관리자")
         self.guild.default_role = everyone
         self.guild.roles = [everyone, self.admin_role, role(28, "길드원")]
@@ -124,7 +126,8 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_adopting_idless_room_requires_matching_creator_audit_record(self):
         self.party["room_id"] = None
-        self.guild.fetch_channels.return_value = [self.room]
+        self.channel_list.return_value = [dict(id="555", type=0, topic=self.room.topic)]
+        self.guild.fetch_channel.return_value = self.room
         self.guild.audit_logs.return_value = records()
         with self.assertRaises(MeetingAccessError):
             await self.sync._locate_room(self.guild, self.party)
@@ -134,11 +137,30 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.guild.audit_logs.call_args.kwargs["user"].id, 99)
         self.store.refs.assert_called_once_with(10, 1, room_id=555, guide_id=None)
 
+    async def test_audited_room_with_changed_topic_is_not_adopted(self):
+        self.party["room_id"] = None
+        marker = self.room.topic
+        self.channel_list.return_value = [dict(id="555", type=0, topic=marker)]
+        self.guild.audit_logs.return_value = records(SimpleNamespace(target=self.room, reason=marker))
+        self.room.topic = "unrelated"
+        self.guild.fetch_channel.return_value = self.room
+        with self.assertRaises(MeetingAccessError):
+            await self.sync._ensure_room(self.guild, self.party, create=True)
+        self.store.refs.assert_not_called()
+        self.guild.create_text_channel.assert_not_awaited()
+
+    async def test_channel_inventory_failure_cannot_trigger_room_creation(self):
+        self.party["room_id"] = None
+        self.channel_list.side_effect = TimeoutError()
+        with self.assertRaises(TimeoutError):
+            await self.sync._ensure_room(self.guild, self.party, create=True)
+        self.guild.create_text_channel.assert_not_awaited()
+
     async def test_sdk_duplicate_create_blocks_publication_and_disband_until_reconciled(self):
         self.guild.fetch_channel.return_value = self.room
         extra = text_channel(self.guild, 556)
         extra.topic = self.room.topic
-        self.guild.fetch_channels.return_value = [self.room, extra]
+        self.channel_list.return_value = [dict(id=str(c.id), type=0, topic=c.topic) for c in (self.room, extra)]
         self.room.overwrites = room_overwrites(self.guild, 99, self.party["members"], self.party["watchers"])
         self.party.update(phase="creating", promo_token=None, ads=[])
         self.sync._public = AsyncMock()
@@ -203,7 +225,7 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_404_with_channel_still_listed_preserves_pending_disband(self):
         self.guild.fetch_channel.return_value = self.room
-        self.guild.fetch_channels.return_value = [self.room]
+        self.channel_list.return_value = [dict(id="555", type=0, topic=self.room.topic)]
         self.room.delete.side_effect = missing(10003)
         self.party.update(phase="disbanding", promo_token=None, activity="ended", ads=[])
         self.sync._public = AsyncMock()
@@ -220,11 +242,11 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
             await self.sync._ensure_room(self.guild, self.party, create=True)
         self.store.refs.assert_not_called()
         self.guild.create_text_channel.assert_not_awaited()
-        self.guild.fetch_channels.assert_not_awaited()
+        self.channel_list.assert_not_awaited()
 
     async def test_inconsistent_channel_lookup_does_not_retire_or_replace_a_room(self):
         self.guild.fetch_channel.side_effect = missing(10003)
-        self.guild.fetch_channels.return_value = [self.room]
+        self.channel_list.return_value = [dict(id="555", type=20)]
         with self.assertRaisesRegex(ResourceError, "서버 목록"):
             await self.sync._ensure_room(self.guild, self.party, create=True)
         self.guild.create_text_channel.assert_not_awaited()
