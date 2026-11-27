@@ -6,7 +6,8 @@ import discord
 from discord import app_commands
 
 from discord_bot.commands import abyss, cleanup, market, rune_stats, server_status, test_bot, trains
-from discord_bot.commands import drop_stats, special_users
+from discord_bot.commands import drop_stats, meetings, special_users
+from discord_bot.meeting_jobs import MeetingJobs
 from services.drop_stats import DropStatsService
 from discord_bot.jobs.abyss import AbyssJobs
 from discord_bot.jobs.database_cleanup import DatabaseCleanupJobs
@@ -36,7 +37,9 @@ class MerjangBot(discord.Client):
         open_subscriptions,
         rune_stats_service,
     ):
-        super().__init__(intents=discord.Intents.default())
+        intents = discord.Intents.default()
+        intents.members = getattr(settings, "meetings_member_intent", False)
+        super().__init__(intents=intents)
         self.settings = settings
         self.http_client = http
         self.database = database
@@ -66,17 +69,21 @@ class MerjangBot(discord.Client):
         if getattr(settings,'drop_stats_guild_id',0):
             drop_stats.register(self)
         special_users.register(self)
+        meetings.register(self)
+        self.meeting_jobs = MeetingJobs(self)
         self.jobs = [
             NoticeJobs(self),
             ServerStatusJobs(self),
             AbyssJobs(self),
             DatabaseCleanupJobs(self),
             RuneStatsJobs(self),
+            self.meeting_jobs,
         ]
 
     async def setup_hook(self):
         self.database.initialize()
         self.add_view(self.train_controller.panel_view)
+        meetings.setup_views(self)
         self.abyss.repository.seed_initial_observation()
         await self.abyss.refresh()
         self.rune_stats.load_cache()
@@ -104,6 +111,7 @@ class MerjangBot(discord.Client):
                         self.tree.add_command(command)
 
     async def on_ready(self):
+        self.meeting_jobs.reconnect()
         logger.info("머장봇 접속 성공: %s / 서버 %s개", self.user, len(self.guilds))
         try:
             await self.sync_commands()
@@ -123,6 +131,39 @@ class MerjangBot(discord.Client):
             await self.train_controller.ensure_panel(guild)
         except Exception:
             logger.exception("새 서버 우만열차 현황판 초기화 오류")
+
+    async def on_guild_remove(self, guild):
+        self.meeting_jobs.forget(guild.id)
+        self._synced_guilds.discard(guild.id)
+
+    async def on_raw_member_remove(self, payload):
+        guild = self.get_guild(payload.guild_id)
+        if guild is not None:
+            await self.meetings.member_left(guild, payload.user.id)
+
+    async def on_guild_role_update(self, before, after):
+        self.meeting_jobs.role_changed(after.guild, before=before, after=after)
+
+    async def on_guild_role_create(self, role):
+        self.meeting_jobs.role_changed(role.guild, after=role)
+
+    async def on_guild_role_delete(self, role):
+        self.meeting_jobs.role_changed(role.guild, before=role)
+
+    async def on_guild_channel_delete(self, channel):
+        self.meeting_jobs.resource_deleted(channel.guild.id, channel.id)
+
+    async def on_guild_channel_update(self, before, after):
+        self.meeting_jobs.room_changed(before, after)
+
+    async def on_raw_message_delete(self, payload):
+        self.meeting_jobs.resource_deleted(payload.guild_id, payload.channel_id, (payload.message_id,))
+
+    async def on_raw_bulk_message_delete(self, payload):
+        self.meeting_jobs.resource_deleted(payload.guild_id, payload.channel_id, payload.message_ids)
+
+    async def on_message(self, message):
+        self.meeting_jobs.message_seen(message)
 
     async def close(self):
         pending = []

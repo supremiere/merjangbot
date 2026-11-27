@@ -22,6 +22,7 @@ class Settings:
     drop_stats_key: str = ''
     drop_stats_guild_id: int = 0
     special_users_admin_key: str = field(default='', repr=False)
+    meetings_member_intent: bool = False
 
     @classmethod
     def from_env(cls, env_file=None):
@@ -57,4 +58,5 @@ class Settings:
             drop_stats_key=os.getenv('DROP_STATS_READ_KEY','').strip(),
             drop_stats_guild_id=int(os.getenv('DROP_STATS_GUILD_ID','0') or '0'),
             special_users_admin_key=os.getenv('SPECIAL_USERS_ADMIN_KEY','').strip(),
+            meetings_member_intent=os.getenv("MEETINGS_MEMBER_INTENT", "").strip().lower() in {"1", "true", "yes"},
         )
