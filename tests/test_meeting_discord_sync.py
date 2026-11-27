@@ -57,7 +57,7 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.ui.party_view.return_value = None
         self.bot = SimpleNamespace(user=SimpleNamespace(id=99))
         self.sync = MeetingDiscordSync(self.bot, self.store, self.ui)
-        self.party = dict(id=1, guild_id=10, nonce="unique", room_id=555, guide_id=None,
+        self.party = dict(id=1, guild_id=10, nonce="unique", room_id=555, guide_id=None, recruit_id=None,
                           members=[11, 12], watchers=[13], destination="테스트", phase="ready")
         self.room = text_channel(self.guild, self.party["room_id"])
         self.room.topic = self.sync._room_marker(self.party)
@@ -229,7 +229,6 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.guild.fetch_channel.return_value = self.room
         self.room.delete.side_effect = missing(10004)
         self.party.update(phase="disbanding", promo_token=None, activity="ended", ads=[])
-        self.sync._public = AsyncMock()
         with self.assertRaises(discord.NotFound):
             await self.sync.sync(self.guild, self.party)
         self.store.refs.assert_not_called()
@@ -239,7 +238,6 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.channel_list.return_value = [dict(id="555", type=0, topic=self.room.topic)]
         self.room.delete.side_effect = missing(10003)
         self.party.update(phase="disbanding", promo_token=None, activity="ended", ads=[])
-        self.sync._public = AsyncMock()
         with self.assertRaisesRegex(ResourceError, "해산을 보류"):
             await self.sync.sync(self.guild, self.party)
         self.store.refs.assert_not_called()
@@ -271,6 +269,28 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(discord.NotFound):
                 await self.sync._ensure_message(self.room, 67, marker, payload)
         self.room.send.assert_not_awaited()
+
+    async def test_disband_uses_the_party_marker_for_known_and_unacknowledged_posts(self):
+        marker = _marker(10, 1, "모집")
+        other_marker = _marker(10, 2, "모집")
+        channel = self.room
+        self.guild.fetch_channel.return_value = channel
+        foreign = self.message(channel, 70, self.sync._payload(self.party, "public", other_marker)["embed"])
+        owned = self.message(channel, 71, self.sync._payload(self.party, "public", marker)["embed"])
+        self.party.update(recruit_channel_id=channel.id, recruit_id=foreign.id)
+        channel.fetch_message.return_value = foreign
+        with self.assertRaises(ResourceError):
+            await self.sync._remove_public(self.guild, self.party)
+        self.store.refs.assert_not_called()
+
+        self.party["recruit_id"] = None
+        self.sync._mark_sending(marker, channel.id)
+        channel.history.return_value = records(foreign, owned)
+        await self.sync._remove_public(self.guild, self.party)
+        owned.delete.assert_awaited_once()
+        foreign.delete.assert_not_awaited()
+        channel.send.assert_not_awaited()
+        self.assertIsNone(self.sync._attempt(marker))
 
     async def test_hidden_history_cannot_release_or_repeat_uncertain_post(self):
         marker = _marker(10, 1, "홍보", "T1")
@@ -349,7 +369,7 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.sync._public = AsyncMock()
         await self.sync.sync(self.guild, self.party)
         self.room.delete.assert_awaited_once()
-        self.assertEqual(self.sync._public.await_args.args[1]["phase"], "disbanded")
+        self.sync._public.assert_not_awaited()
         self.store.refs.assert_called_with(10, 1, phase="disbanded", room_id=None, guide_id=None,
                                            error="", dirty=False)
         self.party["phase"] = "disbanded"

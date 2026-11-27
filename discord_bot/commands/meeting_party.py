@@ -492,7 +492,7 @@ async def open_manage(i, svc, party_id, *, lead=None):
 
     async def disband(j):
         svc.require_manager(j, party_id)
-        await confirm(j, "**파티를 해산하면 전용 채널과 그 안의 채팅 기록이 삭제됩니다.** 이 작업은 되돌릴 수 없어요.",
+        await confirm(j, "**파티를 해산하면 모집글, 홍보글, 전용 채널과 그 안의 채팅 기록이 삭제됩니다.** 이 작업은 되돌릴 수 없어요.",
                       "채널 삭제 및 해산", mutation("disband", "파티를 해산했어요."))
 
     async def toggle_watch(j):

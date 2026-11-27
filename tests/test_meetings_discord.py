@@ -325,6 +325,53 @@ def test_explicit_disband_only_deletes_owned_room_and_is_retryable(environment):
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_disband_retires_only_this_partys_posts_and_retries_partial_cleanup(environment, legacy):
+    async def exercise():
+        store, network, adapter, pid = environment
+        service = MeetingService(adapter.bot, store, adapter)
+        leader = interaction(network, 100)
+        await adapter.sync(network.guild, store.get(10, pid))
+        other = await service.create(leader, destination="고정 공대", capacity=2)
+        for party_id in (pid, other["id"]):
+            await service.act(leader, party_id, "promote")
+        original = store.get(10, pid)
+        sibling = store.get(10, other["id"])
+        ad_ref, = original["ads"]
+        ad = network.messages[503][ad_ref["message_id"]]
+        delete_ad = ad.delete
+        ad.delete = AsyncMock(side_effect=http_error(403))
+        if legacy:
+            store.mutate(10, pid, 100, False, "disband")
+            await network.channels[original["room_id"]].delete()
+            store.refs(10, pid, phase="disbanded", room_id=None, guide_id=None, dirty=False)
+            store.db.initialize()
+            assert [p["id"] for p in store.scan(10, dirty_only=True)] == [pid]
+            with pytest.raises(MeetingError):
+                await service.recover(network.guild, pid)
+        else:
+            with pytest.raises(MeetingError):
+                await service.act(leader, pid, "disband")
+
+        assert original["recruit_id"] not in network.messages[502]
+        assert store.get(10, pid)["recruit_id"] is None
+        assert store.get(10, pid)["ads"] == [ad_ref]
+        assert store.page(10, "errors")[1] == store.stats(10)["errors"] == 1
+        ad.delete = delete_ad
+        await service.recover(network.guild, pid, manual=True)
+        store.db.initialize()
+        await service.recover(network.guild, pid)
+
+        assert set(network.messages[502]) == {sibling["recruit_id"]}
+        assert set(network.messages[503]) == {sibling["ads"][0]["message_id"]}
+        assert sibling["room_id"] in network.channels and original["room_id"] not in network.channels
+        assert store.get(10, pid)["phase"] == "disbanded" and not store.get(10, pid)["ads"]
+        assert store.scan(10, dirty_only=True) == []
+        assert store.get(10, other["id"]) == sibling
+
+    asyncio.run(exercise())
+
+
 def interaction(network, uid, *, admin=False, request_id=10000):
     member = SimpleNamespace(id=uid, bot=False, guild=network.guild,
                              guild_permissions=discord.Permissions.none(),

@@ -93,6 +93,10 @@ BEGIN SELECT RAISE(ABORT,'meeting capacity exceeded'); END;
 
 def initialize_meetings(conn):
     conn.executescript(SCHEMA)
+    # Older versions kept a final recruitment post and advertisement after disband.
+    conn.execute("""UPDATE meeting_parties SET dirty=1 WHERE phase='disbanded' AND dirty=0
+                    AND (recruit_id IS NOT NULL OR EXISTS
+                         (SELECT 1 FROM meeting_ads WHERE party_id=meeting_parties.id))""")
 
 
 def _integer(value, label, low, high):
@@ -531,7 +535,7 @@ class MeetingStore:
     def _filter(self, conn, gid, kind, user_id):
         clauses = ["p.guild_id=?"]
         params = [gid]
-        if kind not in ("recovery", "due"):
+        if kind not in ("recovery", "due", "errors"):
             clauses.append("p.phase!='disbanded'")
         if kind in ("open", "watch"):
             clauses.append("p.phase='ready'")
@@ -601,10 +605,12 @@ class MeetingStore:
                     SUM(phase='ready' AND NOT closed AND activity!='ended' AND seats>=capacity) AS full,
                     SUM(phase='ready' AND closed) AS closed,
                     SUM(activity='active') AS active, SUM(activity='ended') AS ended,
-                    SUM(seats) AS members, SUM(activity_at<=?) AS inactive,
-                    SUM(error!='' OR id IN (SELECT party_id FROM meeting_member_checks WHERE error!='')) AS errors
+                    SUM(seats) AS members, SUM(activity_at<=?) AS inactive
                     FROM counted""", (gid, cutoff)).fetchone()
-            return {k: int(row[k] or 0) for k in row.keys()}
+            result = {k: int(row[k] or 0) for k in row.keys()}
+            where, args = self._filter(conn, gid, "errors", None)
+            result["errors"] = conn.execute(f"SELECT COUNT(*) FROM meeting_parties p WHERE {where}", args).fetchone()[0]
+            return result
 
     def associated(self, gid, user):
         with self._connection() as conn:
