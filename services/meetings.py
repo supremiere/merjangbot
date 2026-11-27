@@ -121,6 +121,9 @@ class MeetingService:
             by = f"<@{actor}>" if actor else "봇"
             await channel.send(f"💌 {party} · {label} · {status} · {by} {detail}".rstrip(),
                                allowed_mentions=NO_MENTIONS)
+        except discord.Forbidden as exc:
+            logger.warning("계획된 만남 관리자 로그 채널 전송 권한 없음 (서버 %s, 채널 %s, Discord %s)",
+                           guild.id, channel_id, exc.code)
         except Exception:
             logger.exception("계획된 만남 관리자 로그 전송 실패 (서버 %s)", guild.id)
 
@@ -134,8 +137,8 @@ class MeetingService:
             self.store.audit(guild.id, pid, actor, action, reason, False)
         except sqlite3.Error:
             logger.exception("계획된 만남 복구 상태 저장 실패 (파티 %s)", pid)
-        logger.warning("계획된 만남 %s 실패 (서버 %s, 파티 %s): %s",
-                       action, guild.id, pid, type(exc).__name__)
+        logger.warning("계획된 만남 %s 실패 (서버 %s, 파티 %s): %s · %s",
+                       action, guild.id, pid, type(exc).__name__, reason)
         await self._log(guild, pid, actor, action, reason, False)
         return MeetingError(f"파티 #{pid} 처리에 확인이 필요해요. {reason} 관리자 모드에서 복구할 수 있어요.")
 
