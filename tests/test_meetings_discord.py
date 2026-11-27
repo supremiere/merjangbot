@@ -38,7 +38,7 @@ class LocalDiscord:
         http = SimpleNamespace(get_all_guild_channels=AsyncMock(side_effect=self.channel_rows))
         self.guild = SimpleNamespace(
             id=10, owner_id=123, default_role=self.default_role, _state=SimpleNamespace(http=http),
-            me=SimpleNamespace(id=self.bot_id),
+            me=SimpleNamespace(id=self.bot_id, guild_permissions=discord.Permissions.all()),
             roles=[self.default_role, self.admin_role], create_text_channel=AsyncMock(side_effect=self.create),
             fetch_channel=AsyncMock(side_effect=self.channel),
             fetch_member=AsyncMock(side_effect=self.member),
@@ -119,6 +119,14 @@ class LocalDiscord:
         return channel
 
     async def create(self, name, **options):
+        perms = self.guild.me.guild_permissions
+        if not perms.administrator:
+            if not perms.manage_channels:
+                raise http_error(403, 50013)
+            for overwrite in options["overwrites"].values():
+                allow, deny = overwrite.pair()
+                if allow.manage_roles or deny.manage_roles or (allow.value | deny.value) & ~perms.value:
+                    raise http_error(403, 50013)
         channel = self.add_text(max(self.channels) + 1, options["topic"], options["overwrites"])
         self.create_log.append(SimpleNamespace(target=channel, reason=options["reason"]))
         return channel
@@ -161,6 +169,40 @@ def test_auto_place_room_without_category_or_log_setting(environment, recruit_ca
         network.channels[502].category_id = None if recruit_category else 500
         await adapter.sync(network.guild, store.get(10, party["id"]))
         network.guild.create_text_channel.assert_awaited_once()
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(("missing", "label"), [("manage_channels", "채널 관리"), ("pin_messages", "메시지 고정")])
+def test_non_admin_bot_recovers_same_party_after_create_permission_failure(environment, missing, label):
+    async def exercise():
+        store, network, adapter, pid = environment
+        guild = network.guild
+        guild.me.guild_permissions = discord.Permissions(
+            view_channel=True, manage_channels=True, manage_roles=True, send_messages=True, read_message_history=True,
+            embed_links=True, attach_files=True, manage_messages=True, pin_messages=True)
+        service = MeetingService(adapter.bot, store, adapter)
+        guild.me.guild_permissions.manage_roles = False
+        with pytest.raises(MeetingError, match="머장봇에서 역할 관리"):
+            await service.recover(guild, pid, manual=True)
+        guild.create_text_channel.assert_not_awaited()
+        guild.me.guild_permissions.manage_roles = True
+        setattr(guild.me.guild_permissions, missing, False)
+        with pytest.raises(MeetingError, match=rf"<#500>.*50013.*{label}"):
+            await service.recover(guild, pid, manual=True)
+        assert store.get(10, pid)["room_id"] is None and not network.messages[502]
+        setattr(guild.me.guild_permissions, missing, True)
+        party = await service.recover(guild, pid, manual=True)
+        assert party["phase"] == "ready" and party["id"] == pid
+        room = network.channel(party["room_id"])
+        assert room.overwrites[network.default_role].view_channel is False
+        assert all(o.manage_roles is None for o in room.overwrites.values())
+        watcher = interaction(network, 102)
+        await service.act(watcher, pid, "watch")
+        grant = room.overwrites[discord.Object(102, type=discord.User)]
+        assert grant.read_message_history and grant.send_messages
+        await service.recover(guild, pid, manual=True)
+        assert len(network.create_log) == len(network.messages[502]) == len(network.messages[room.id]) == 1
 
     asyncio.run(exercise())
 

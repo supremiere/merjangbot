@@ -46,6 +46,7 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         self.store.db = self.db
         self.guild = MagicMock(spec=discord.Guild)
         self.guild.id, self.guild.owner_id = 10, 100
+        self.guild.me.guild_permissions = discord.Permissions.all()
         self.channel_list = AsyncMock(return_value=[])
         self.guild._state = SimpleNamespace(http=SimpleNamespace(get_all_guild_channels=self.channel_list))
         everyone, self.admin_role = role(10, "@everyone"), role(20, "관리자")
@@ -88,6 +89,16 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
         new = {target.id: perms for target, perms in self.room.edit.await_args.kwargs["overwrites"].items()}
         self.assertEqual(set(new), {10, 11, 12, 32, 99})
         self.assertTrue(new[32].manage_messages)
+
+    async def test_existing_restricted_room_retains_its_denies_after_bot_permissions_change(self):
+        self.guild.me.guild_permissions = discord.Permissions(manage_channels=True, manage_roles=True)
+        original = discord.PermissionOverwrite(manage_roles=False, manage_webhooks=False)
+        old_bot = discord.PermissionOverwrite(manage_roles=True)
+        self.room.overwrites_for.side_effect = lambda target: original if target is self.guild.default_role else old_bot
+        grants = room_overwrites(self.guild, 99, [11], [13], room=self.room)
+        self.assertIs(grants[self.guild.default_role].manage_roles, False)
+        self.assertIs(grants[self.guild.default_role].manage_webhooks, False)
+        self.assertIs(grants[discord.Object(99, type=discord.User)].manage_roles, True)
 
     async def test_discordpy_encodes_roles_and_uncached_watchers_on_creation_and_edit(self):
         grants = room_overwrites(self.guild, 99, [11], [13])

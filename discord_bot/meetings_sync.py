@@ -10,6 +10,12 @@ from discord_bot.commands.trains import TRAIN_ADMIN_ROLES
 
 UNKNOWN_CHANNEL = 10003
 UNKNOWN_MESSAGE = 10008
+ROOM_PERMISSIONS = {
+    "view_channel": "채널 보기", "manage_channels": "채널 관리", "manage_roles": "역할 관리",
+    "send_messages": "메시지 보내기", "read_message_history": "메시지 기록 보기",
+    "attach_files": "파일 첨부", "embed_links": "링크 첨부",
+    "manage_messages": "메시지 관리", "pin_messages": "메시지 고정",
+}
 
 
 class ResourceError(ValueError):
@@ -25,23 +31,37 @@ def room_name(destination):
     return "🔒・" + (text[:90] or "파티방")
 
 
-def room_overwrites(guild, bot_id, members, watchers):
+def room_overwrites(guild, bot_id, members, watchers, *, room=None):
     """Specify all grants at channel creation so it is never temporarily public."""
     chat = dict(view_channel=True, read_message_history=True, send_messages=True,
                 attach_files=True, embed_links=True)
     mod = dict(chat, manage_messages=True, pin_messages=True)
+    if guild.me is None:
+        raise MeetingAccessError("서버에서 머장봇 역할을 확인할 수 없어요. 잠시 후 복구해주세요.")
+    perms = guild.me.guild_permissions
     private = discord.PermissionOverwrite(view_channel=False, manage_channels=False,
-                                          manage_roles=False, manage_webhooks=False,
-                                          create_public_threads=False, create_private_threads=False,
                                           manage_messages=False, pin_messages=False)
+    bot_grant = discord.PermissionOverwrite(**mod, manage_channels=True)
+    # Create Guild Channel reserves MANAGE_ROLES overwrites for administrators.
+    # Ordinary bots inherit that permission from their server role.
+    if perms.administrator:
+        private.manage_roles = False
+        bot_grant.manage_roles = True
+    # Retain restrictions on rooms made before a bot permission change.
+    existing = room.overwrites_for(guild.default_role) if room is not None else discord.PermissionOverwrite()
+    if not perms.administrator and existing.manage_roles is False:
+        private.manage_roles = False
+        bot_grant.manage_roles = room.overwrites_for(guild.me).manage_roles
+    for flag in ("manage_webhooks", "create_public_threads", "create_private_threads"):
+        if perms.administrator or getattr(perms, flag) or getattr(existing, flag) is False:
+            setattr(private, flag, False)
     result = {guild.default_role: private}
     for role in guild.roles:
         if role != guild.default_role and role.name in TRAIN_ADMIN_ROLES:
             result[role] = discord.PermissionOverwrite(**mod)
     for user_id in set(members) | set(watchers):
         result[discord.Object(int(user_id), type=discord.User)] = discord.PermissionOverwrite(**chat)
-    result[discord.Object(int(bot_id), type=discord.User)] = discord.PermissionOverwrite(
-        **mod, manage_channels=True, manage_roles=True)
+    result[discord.Object(int(bot_id), type=discord.User)] = bot_grant
     if len(result) > 1000:  # Discord API error 30060
         raise ResourceError("파티방 권한 대상이 Discord 채널당 최대 1,000개를 초과합니다.")
     return result
@@ -222,16 +242,28 @@ class MeetingDiscordSync:
 
     async def _ensure_room(self, guild, party, *, create):
         room = await self._locate_room(guild, party)
-        permissions = room_overwrites(guild, self.bot_id, party["members"], party["watchers"])
+        permissions = room_overwrites(guild, self.bot_id, party["members"], party["watchers"], room=room)
         if room is None:
             if not create:
                 raise MeetingAccessError("파티방이 없어 입장할 수 없습니다. 파티 관리에서 복구해주세요.")
             category = await self._room_category(guild, party)
+            perms = guild.me.guild_permissions
+            if not (perms.administrator or perms.manage_roles):
+                raise MeetingAccessError("머장봇이 참가·관전자에게 파티방 접근 권한을 줄 수 없어요. "
+                                         "서버 설정 → 역할 → 머장봇에서 역할 관리를 켜주세요.")
             marker = self._room_marker(party)
             try:
                 room = await guild.create_text_channel(
                     room_name(party["destination"]), category=category, topic=marker,
                     overwrites=permissions, reason=marker)
+            except discord.Forbidden as exc:
+                location = f"<#{category.id}> 카테고리" if category else "서버 최상위"
+                missing = [label for flag, label in ROOM_PERMISSIONS.items()
+                           if not perms.administrator and not getattr(perms, flag)]
+                detail = ("머장봇 서버 역할에서 꺼진 권한: " + ", ".join(missing) + ".") if missing else (
+                    "머장봇 역할과 해당 위치의 채널 관리·권한 관리 설정을 확인해주세요.")
+                raise MeetingAccessError(f"{location}에 비공개 파티방을 만들 수 없어요 "
+                                         f"(Discord {exc.code}). {detail}") from exc
             except discord.HTTPException as exc:
                 if exc.code in (30013, 50035):
                     raise MeetingAccessError("파티방 생성에 실패했습니다. 서버·카테고리 채널 한도와 권한을 확인해주세요.") from exc
