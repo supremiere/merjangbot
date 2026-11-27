@@ -55,7 +55,7 @@ def test_any_schedule_survives_months_restart_and_reuse(store, clock, tmp_path, 
     departure = None if days is None else clock.now + days * DAY
     pid = party(store, departure=departure)
     act(store, pid, PLAYER, "join")
-    act(store, pid, PLAYER, "roster", target=PLAYER, character="일곱", job="힐러", role="보조", note="메모")
+    act(store, pid, PLAYER, "roster", target=PLAYER, character="일곱", note="메모")
     act(store, pid, LEADER, "strategy", text="두 번째 기믹에 모이기")
     before = store.get(GUILD, pid)
     clock.now += 400 * DAY
@@ -147,6 +147,20 @@ def test_manual_recruitment_and_membership_are_independent_of_other_parties(stor
     act(store, first, LEADER, "open")
     assert act(store, first, PLAYER, "join")["members"] == [LEADER, PLAYER]
     assert store.page(GUILD, "open")[1] == 1
+
+
+def test_legacy_roster_fields_survive_character_and_note_edits(store):
+    pid = party(store)
+    with store.db.connect() as conn:
+        conn.execute("UPDATE meeting_members SET job='힐러', role='보조' WHERE party_id=? AND user_id=?",
+                     (pid, LEADER))
+    assert LEADER not in store.get(GUILD, pid)["roster"]
+    updated = act(store, pid, LEADER, "roster", character="일곱", note="메모")
+    assert updated["roster"][LEADER] == {"character": "일곱", "note": "메모"}
+    with store.db.connect() as conn:
+        row = conn.execute("SELECT job, role FROM meeting_members WHERE party_id=? AND user_id=?",
+                           (pid, LEADER)).fetchone()
+    assert tuple(row) == ("힐러", "보조")
 
 
 def test_roster_transfer_departure_orphan_and_guild_isolation(store):

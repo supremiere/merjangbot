@@ -62,6 +62,21 @@ class MeetingPartyUITest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIn("비공개캐릭터", payload)
         self.assertIn("내부 공지", str(ui.party_embed(p, "room").to_dict()))
 
+    async def test_roster_and_edit_form_show_only_character_and_note_on_legacy_entry(self):
+        data = dict(character="일곱", job="예전직업", role="예전역할", note="준비물")
+        party = snapshot(roster={30: data})
+        svc = SimpleNamespace(require_access=Mock(return_value=party), require_member=Mock(return_value=party),
+                              act=AsyncMock())
+        viewer, editor = interaction(42), interaction(30)
+        await ui.show_roster(viewer, svc, 9)
+        field = viewer.response.send_message.await_args.kwargs["embed"].fields[0]
+        self.assertEqual(field.value, "<@30> · 일곱\n준비물")
+        await ui.roster_form(editor, svc, 9, 30)
+        form = editor.response.send_modal.await_args.args[0]
+        self.assertEqual(list(form.inputs), ["character", "note"])
+        await form.on_save(editor, {"character": "일곱", "note": "변경"})
+        svc.act.assert_awaited_once_with(editor, 9, "roster", target=30, note="변경")
+
     async def test_full_party_leaves_watch_button_open_even_when_join_is_disabled(self):
         for p in (snapshot(capacity=1), snapshot(activity="ended"), snapshot(closed=True)):
             v = ui.party_view(p, "ad")

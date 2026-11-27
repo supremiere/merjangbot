@@ -213,7 +213,7 @@ class MeetingStore:
             party = by_id[row["party_id"]]
             user = row["user_id"]
             party["members"].append(user)
-            entry = {k: row[k] for k in ("character", "job", "role", "note")}
+            entry = {k: row[k] for k in ("character", "note")}
             if any(entry.values()):
                 party["roster"][user] = entry
         for table, key in (("meeting_bans", "banned"), ("meeting_watchers", "watchers")):
@@ -357,7 +357,7 @@ class MeetingStore:
             if target not in p["members"]:
                 raise MeetingError("로스터는 참가 중인 파티원만 작성할 수 있어요.")
             values = {key: _text(fields[key], "로스터", limit)
-                      for key, limit in (("character", 100), ("job", 100), ("role", 100), ("note", 300))
+                      for key, limit in (("character", 100), ("note", 300))
                       if key in fields}
             if values:
                 columns = ", ".join(f"{key}=?" for key in values)

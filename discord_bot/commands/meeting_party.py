@@ -323,9 +323,9 @@ async def show_roster(i, svc, pid, page=0):
         embed.description = "현재 참가자가 없어요."
     for uid in members[page*per_page:(page+1)*per_page]:
         data = p["roster"].get(uid, {})
-        identity = [safe_text(data[key]) for key in ("character", "job", "role") if data.get(key)]
+        character = safe_text(data.get("character") or "미등록")
         note = safe_text(data.get("note") or "")
-        value = f"<@{uid}> · " + (" / ".join(identity) if identity else "미등록")
+        value = f"<@{uid}> · {character}"
         if note:
             value += "\n" + note
         embed.add_field(name="👑 파티장" if uid == p["leader_id"] else "파티원", value=clipped(value, 1024), inline=False)
@@ -364,10 +364,10 @@ async def roster_form(i, svc, pid, target):
     if target not in p["members"]:
         raise ValueError("현재 파티에 참가 중인 사람의 로스터만 수정할 수 있어요.")
     data = p["roster"].get(target, {})
-    fields = [(key, label, data.get(key), limit, False, paragraph, "") for key, label, limit, paragraph in (
-        ("character", "캐릭터명", 100, False), ("job", "직업", 100, False),
-        ("role", "담당 역할", 100, False), ("note", "기타 비고", 300, True),
-    )]
+    fields = [
+        ("character", "캐릭터명", data.get("character"), 100, False, False, ""),
+        ("note", "비고", data.get("note"), 300, False, True, ""),
+    ]
 
     async def save(j, values):
         changes = {key: value for key, value in values.items() if value != (data.get(key) or "")}
