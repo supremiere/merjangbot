@@ -258,7 +258,7 @@ class MeetingService:
 
     async def _recover(self, guild, pid, actor=0, *, manual=False, check_members=False):
         party = self.store.get(guild.id, pid)
-        if party["phase"] == "disbanded":
+        if party["phase"] == "disbanded" and not party["dirty"]:
             return party
         member_problem = None
         pending = party["member_check"]

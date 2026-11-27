@@ -134,6 +134,15 @@ async def _get_message(channel, message_id, bot_id, marker):
     return message
 
 
+async def _delete_message(message):
+    try:
+        await message.delete()
+    except discord.NotFound as exc:
+        if exc.code != UNKNOWN_MESSAGE:
+            raise
+        _require_read_history(message.channel)
+
+
 def _components(value):
     """Ignore server-assigned component IDs and empty fields in Discord responses."""
     if isinstance(value, dict):
@@ -212,11 +221,11 @@ class MeetingDiscordSync:
                 pass
         raise MeetingAccessError("파티방 후보의 생성 기록을 확인할 수 없습니다. 관리자에게 알려주세요.")
 
-    async def _recruit_channel(self, guild, party, *, final=False):
+    async def _recruit_channel(self, guild, party):
         original = party["recruit_channel_id"]
         if original:
             channel = await _get_channel(guild, original, discord.TextChannel)
-            if channel is not None or final:
+            if channel is not None:
                 return channel
         current = self.store.settings(guild.id)["recruit_channel_id"]
         if current == original:
@@ -349,27 +358,36 @@ class MeetingDiscordSync:
                 self._confirmed(marker)
             raise
 
-    async def _public(self, guild, party, *, final=False):
-        channel = await self._recruit_channel(guild, party, final=final)
+    async def _remove_public(self, guild, party):
+        marker = _marker(guild.id, party["id"], "모집")
+        if party["recruit_id"]:
+            if not party["recruit_channel_id"]:
+                raise ResourceError("모집글을 삭제할 원래 채널을 확인해주세요.")
+            channel = await _get_channel(guild, party["recruit_channel_id"], discord.TextChannel)
+            if channel:
+                message = await _get_message(channel, party["recruit_id"], self.bot_id, marker)
+                if message:
+                    await _delete_message(message)
+            self._refs(party, recruit_id=None)
+
+        # A publish may have reached Discord before its message ID was saved.
+        attempt = self._attempt(marker)
+        if attempt:
+            channel = await _get_channel(guild, attempt[0], discord.TextChannel)
+            if channel:
+                message = await self._replay(channel, marker, attempt[1])
+                if message:
+                    await _delete_message(message)
+            self._confirmed(marker)
+
+    async def _public(self, guild, party):
+        channel = await self._recruit_channel(guild, party)
         if channel is None:
-            if final:
-                return
             raise ResourceError("모집 메시지를 게시할 텍스트 채널을 설정해주세요.")
         if party["recruit_channel_id"] != channel.id:
             self._refs(party, recruit_channel_id=channel.id, recruit_id=None)
         marker = _marker(guild.id, party["id"], "모집")
         payload = self._payload(party, "public", marker)
-        if final:
-            old = (await _get_message(channel, party["recruit_id"], self.bot_id, marker)
-                   if party["recruit_id"] else None)
-            if old is None:
-                old = await self._old_attempt(channel, marker)
-            if old:
-                await _update(old, payload)
-                if party["recruit_id"] != old.id:
-                    self._refs(party, recruit_id=old.id)
-            self._confirmed(marker)
-            return
         message = await self._ensure_message(channel, party["recruit_id"], marker, payload)
         if party["recruit_id"] != message.id:
             self._refs(party, recruit_id=message.id)
@@ -385,7 +403,7 @@ class MeetingDiscordSync:
         if not message.pinned:
             await message.pin(reason="계획된 만남 파티방 안내")
 
-    async def _ads(self, guild, party):
+    async def _ads(self, guild, party, *, remove_all=False):
         # Keep one active advertisement per party. A failed deletion keeps its ID
         # in SQLite so a later repair can retire it without losing track of it.
         ads = list(party["ads"])
@@ -407,17 +425,12 @@ class MeetingDiscordSync:
                 marker = message.embeds[0].footer.text if message.embeds else None
                 if not marker or not marker.startswith(prefix) or not _owned(message, channel, self.bot_id, marker):
                     raise ResourceError("홍보글의 작성자 또는 파티 식별자가 달라 수정을 중지했습니다.")
-                if not kept:
+                if not remove_all and not kept:
                     await _update(message, self._payload(party, "ad", marker))
                     self._confirmed(marker)
                     kept = True
                     continue
-                try:
-                    await message.delete()
-                except discord.NotFound as exc:
-                    if exc.code != UNKNOWN_MESSAGE:
-                        raise
-                    _require_read_history(channel)
+                await _delete_message(message)
             ads.remove(ref)
             self._refs(party, ads=list(ads))
 
@@ -476,15 +489,12 @@ class MeetingDiscordSync:
 
     async def sync(self, guild, party):
         self._scope(guild, party)
-        if party["phase"] == "disbanded":
-            return
-        if party["phase"] == "disbanding":
+        if party["phase"] in {"disbanding", "disbanded"}:
             await self._settle_promotion(guild, party)
-            # The decision is irrevocable even while the room deletion awaits
-            # acknowledgement. Final cards must never leave a stale progress label.
-            party = dict(party, phase="disbanded")
-            await self._public(guild, party, final=True)
-            await self._ads(guild, party)
+            await self._remove_public(guild, party)
+            await self._ads(guild, party, remove_all=True)
+            if party["phase"] == "disbanded":
+                return
             room = await self._locate_room(guild, party)
             if room:
                 await self._verify_single_room(guild, party, room)
