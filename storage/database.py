@@ -3,6 +3,8 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 
+from storage.meetings import initialize_meetings
+
 
 class Database:
     def __init__(self, path):
@@ -183,3 +185,4 @@ class Database:
                 FROM maintenance_reminders;
             """)
             self._initialize_train_tables(conn)
+            initialize_meetings(conn)
